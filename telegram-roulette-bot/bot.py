@@ -7,6 +7,8 @@ from telegram import Update
 from telegram.constants import ParseMode
 from telegram.ext import Application, CommandHandler, ContextTypes
 
+from roulette_wheel import build_spin_gif
+
 logging.basicConfig(
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
     level=logging.INFO,
@@ -14,8 +16,8 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 DEFAULT_NUMBERS = [5, 10, 15, 20]
-SPIN_FRAMES = ["🎰 Girando la ruleta.", "🎰 Girando la ruleta..", "🎰 Girando la ruleta..."]
-SPIN_DELAY_SECONDS = 0.5
+MIN_NUMBERS = 2
+MAX_NUMBERS = 10
 
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -50,22 +52,37 @@ async def ruleta(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         )
         return
 
-    if len(numbers) < 2:
+    if len(numbers) < MIN_NUMBERS:
         await update.message.reply_text(
             "⚠️ Dame al menos dos números para poder girar la ruleta. Ejemplo:\n/ruleta 5 10 15 20"
         )
         return
 
-    message = await update.message.reply_text(SPIN_FRAMES[0])
+    if len(numbers) > MAX_NUMBERS:
+        await update.message.reply_text(
+            f"⚠️ Como mucho {MAX_NUMBERS} números para que la ruleta se vea bien 🙂"
+        )
+        return
 
-    for frame in SPIN_FRAMES[1:]:
-        await asyncio.sleep(SPIN_DELAY_SECONDS)
-        await message.edit_text(frame)
+    winning_index = random.randrange(len(numbers))
+    result = numbers[winning_index]
 
-    await asyncio.sleep(SPIN_DELAY_SECONDS)
-    result = random.choice(numbers)
-    await message.edit_text(
-        f"🎉 ¡La ruleta se detuvo en *{result}*!",
+    loop = asyncio.get_running_loop()
+    gif_buffer, total_duration_ms = await loop.run_in_executor(
+        None, build_spin_gif, numbers, winning_index
+    )
+
+    sent = await update.message.reply_animation(
+        animation=gif_buffer,
+        caption="🎰 ¡Girando la ruleta!",
+    )
+
+    await asyncio.sleep(total_duration_ms / 1000)
+
+    await context.bot.edit_message_caption(
+        chat_id=sent.chat_id,
+        message_id=sent.message_id,
+        caption=f"🎉 ¡La ruleta se detuvo en *{result}*!",
         parse_mode=ParseMode.MARKDOWN,
     )
 
