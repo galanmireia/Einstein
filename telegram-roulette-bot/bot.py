@@ -113,20 +113,34 @@ def _payment_message(value: int, respin: bool) -> str:
     return text
 
 
-DEFAULT_SEGMENTS = [
-    Segment("+5", kind="number", value=5, payment=True),
-    Segment("+10", kind="number", value=10, payment=True),
-    Segment("+15", kind="number", value=15, payment=True),
-    Segment("+20", kind="number", value=20, payment=True),
-    Segment("+5\nTIRA\nOTRA VEZ", kind="bonus", value=5, payment=True),
-    Segment("+10\nTIRA\nOTRA VEZ", kind="bonus", value=10, payment=True),
-    Segment(
-        "PREMIO",
-        "🏆🦶 ¡Premio especial! Tienes que mandar una foto de tus pies 😂",
-        kind="prize",
-        value=0,
-    ),
-]
+def _make_segments(values: list[int], respin_values: list[int]) -> list[Segment]:
+    segments = [Segment(f"+{v}", kind="number", value=v, payment=True) for v in values]
+    segments += [
+        Segment(f"+{v}\nTIRA\nOTRA VEZ", kind="bonus", value=v, payment=True)
+        for v in respin_values
+    ]
+    segments.append(
+        Segment(
+            "PREMIO",
+            "🏆🦶 ¡Premio especial! Tienes que mandar una foto de tus pies 😂",
+            kind="prize",
+            value=0,
+        )
+    )
+    return segments
+
+
+EASY_SEGMENTS = _make_segments(values=[5, 10, 15, 20], respin_values=[5, 10])
+MEDIUM_SEGMENTS = _make_segments(values=[10, 20, 30, 40], respin_values=[10, 20, 30])
+HARD_SEGMENTS = _make_segments(values=[20, 40, 60, 80], respin_values=[20, 40, 60, 80])
+
+DIFFICULTIES = {
+    "e": ("Easy", EASY_SEGMENTS),
+    "m": ("Medium", MEDIUM_SEGMENTS),
+    "h": ("Hard", HARD_SEGMENTS),
+}
+
+DEFAULT_SEGMENTS = EASY_SEGMENTS
 
 
 def _display_name(user) -> str:
@@ -214,11 +228,15 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     )
     await update.message.reply_text(
         "¡Hola! Soy la ruleta 🎰\n\n"
-        f"Usa /ruleta para girar la ruleta por defecto: {default_labels} (dinero a pagar 💸).\n"
+        f"Usa /ruleta para girar la ruleta por defecto (dificultad Easy): {default_labels} "
+        "(dinero a pagar 💸).\n"
         "Las casillas que ponen \"TIRA OTRA VEZ\" te hacen pagar Y además "
         "gira otra vez sola (puede encadenarse varias veces seguidas) hasta "
         "caer en una casilla normal, y entonces se suma todo lo que tienes "
         "que pagar.\n\n"
+        "Elige dificultad con /ruleta e (Easy), /ruleta m (Medium) o "
+        "/ruleta h (Hard) — cuanto más difícil, mayores importes y más "
+        "probabilidad de \"TIRA OTRA VEZ\".\n\n"
         "En un grupo también puedes usar /ruletagente para que elija al azar "
         "entre las personas que han escrito ahí o se han apuntado con "
         "/unirme (Telegram no deja a los bots ver la lista completa de "
@@ -286,16 +304,23 @@ async def ruleta(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         await update.message.reply_text("🔒 Este bot es privado, no puedes usarlo.")
         return
 
-    segments = parse_custom_segments(context.args)
+    difficulty_arg = context.args[0].lower() if len(context.args) == 1 else None
 
-    if segments is None and context.args:
-        await update.message.reply_text(
-            "⚠️ Solo puedo girar con números enteros. Ejemplo:\n/ruleta 5 10 15 20"
-        )
-        return
+    if difficulty_arg in DIFFICULTIES:
+        difficulty_name, segments = DIFFICULTIES[difficulty_arg]
+        await update.message.reply_text(f"🎚 Dificultad: *{difficulty_name}*", parse_mode=ParseMode.MARKDOWN)
+    else:
+        segments = parse_custom_segments(context.args)
 
-    if segments is None:
-        segments = DEFAULT_SEGMENTS
+        if segments is None and context.args:
+            await update.message.reply_text(
+                "⚠️ Solo puedo girar con números enteros, o e/m/h para elegir "
+                "dificultad. Ejemplo:\n/ruleta 5 10 15 20\n/ruleta m"
+            )
+            return
+
+        if segments is None:
+            segments = DEFAULT_SEGMENTS
 
     if len(segments) < MIN_OPTIONS:
         await update.message.reply_text(
