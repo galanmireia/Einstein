@@ -111,16 +111,25 @@ async def _download_media(event, key) -> None:
     else:
         filename = file_info.name or f"file{file_info.ext or ''}"
 
+    media = {
+        "data": data,
+        "filename": filename,
+        "send_kwargs": send_kwargs,
+    }
+
     _cache_put(
         media_cache,
         key,
-        {
-            "data": data,
-            "filename": filename,
-            "send_kwargs": send_kwargs,
-        },
+        media,
         MAX_MEDIA_CACHE_ENTRIES,
     )
+
+    # Si para cuando termina de descargarse el mensaje ya se había
+    # marcado como leído (chat abierto en el momento de recibirlo), el
+    # evento MessageRead ya pasó de largo sin encontrar nada en la
+    # caché: lo comprobamos aquí para no perder ese envío.
+    if event.id <= read_state.get(event.chat_id, 0):
+        await _send_media_to_alerts(key, media)
 
 
 async def _send_media_to_alerts(key, media) -> None:
