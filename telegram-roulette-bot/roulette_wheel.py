@@ -92,9 +92,19 @@ def _ease_out_cubic(t: float) -> float:
     return 1 - (1 - t) ** 3
 
 
-def build_spin_gif(
-    numbers: list[int], winning_index: int, frame_count: int = 28
-) -> tuple[io.BytesIO, int]:
+def build_spin_video(
+    numbers: list[int],
+    winning_index: int,
+    frame_count: int = 28,
+    fps: int = 20,
+    hold_seconds: float = 1.5,
+) -> tuple[bytes, int]:
+    import os
+    import tempfile
+
+    import imageio.v2 as imageio
+    import numpy as np
+
     base_wheel = _build_base_wheel(numbers)
 
     count = len(numbers)
@@ -105,26 +115,32 @@ def build_spin_gif(
     full_spins = 3 * 360
     total_rotation = full_spins + target_rotation
 
-    frames = []
-    durations = []
+    ms_per_video_frame = 1000 / fps
+    video_frames = []
     for frame_idx in range(frame_count + 1):
         t = frame_idx / frame_count
         eased_t = _ease_out_cubic(t)
         rotation = eased_t * total_rotation
-        frames.append(_compose_frame(base_wheel, rotation))
-        durations.append(45 + int(eased_t * 90))
+        frame = _compose_frame(base_wheel, rotation)
+        duration_ms = 45 + int(eased_t * 90)
+        repeat = max(1, round(duration_ms / ms_per_video_frame))
+        video_frames.extend([frame] * repeat)
 
-    durations[-1] = 1800
+    hold_repeat = max(1, round((hold_seconds * 1000) / ms_per_video_frame))
+    video_frames.extend([video_frames[-1]] * hold_repeat)
 
-    buffer = io.BytesIO()
-    frames[0].save(
-        buffer,
-        format="GIF",
-        save_all=True,
-        append_images=frames[1:],
-        duration=durations,
-        loop=1,
-        optimize=False,
-    )
-    buffer.seek(0)
-    return buffer, sum(durations)
+    tmp_path = tempfile.mktemp(suffix=".mp4")
+    try:
+        with imageio.get_writer(
+            tmp_path, fps=fps, codec="libx264", quality=8, pixelformat="yuv420p"
+        ) as writer:
+            for frame in video_frames:
+                writer.append_data(np.array(frame))
+        with open(tmp_path, "rb") as f:
+            video_bytes = f.read()
+    finally:
+        if os.path.exists(tmp_path):
+            os.remove(tmp_path)
+
+    total_duration_ms = int(len(video_frames) * ms_per_video_frame)
+    return video_bytes, total_duration_ms

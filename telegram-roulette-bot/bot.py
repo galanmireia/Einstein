@@ -1,4 +1,5 @@
 import asyncio
+import io
 import logging
 import os
 import random
@@ -7,7 +8,7 @@ from telegram import InputFile, Update
 from telegram.constants import ParseMode
 from telegram.ext import Application, CommandHandler, ContextTypes
 
-from roulette_wheel import build_spin_gif
+from roulette_wheel import build_spin_video
 
 logging.basicConfig(
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
@@ -68,13 +69,14 @@ async def ruleta(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     result = numbers[winning_index]
 
     loop = asyncio.get_running_loop()
-    gif_buffer, total_duration_ms = await loop.run_in_executor(
-        None, build_spin_gif, numbers, winning_index
+    video_bytes, total_duration_ms = await loop.run_in_executor(
+        None, build_spin_video, numbers, winning_index
     )
 
-    sent = await update.message.reply_animation(
-        animation=InputFile(gif_buffer, filename="ruleta.gif"),
+    sent = await update.message.reply_video(
+        video=InputFile(io.BytesIO(video_bytes), filename="ruleta.mp4"),
         caption="🎰 ¡Girando la ruleta!",
+        supports_streaming=True,
     )
 
     await asyncio.sleep(total_duration_ms / 1000)
