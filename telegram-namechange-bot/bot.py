@@ -133,11 +133,8 @@ async def whois(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     await update.message.reply_text("\n".join(lines), parse_mode=ParseMode.MARKDOWN)
 
 
-async def track_member(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    chat = update.effective_chat
-    user = update.effective_user
-
-    if not chat or chat.type not in GROUP_CHAT_TYPES or not user or user.is_bot:
+async def _observe_identity(context: ContextTypes.DEFAULT_TYPE, chat, user) -> None:
+    if user.is_bot:
         return
 
     current_name, current_username = _current_identity(user)
@@ -178,6 +175,27 @@ async def track_member(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
     )
 
 
+async def track_member(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    chat = update.effective_chat
+    user = update.effective_user
+
+    if not chat or chat.type not in GROUP_CHAT_TYPES or not user:
+        return
+
+    await _observe_identity(context, chat, user)
+
+
+async def track_new_members(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    chat = update.effective_chat
+    new_members = update.message.new_chat_members if update.message else []
+
+    if not chat or chat.type not in GROUP_CHAT_TYPES:
+        return
+
+    for member in new_members:
+        await _observe_identity(context, chat, member)
+
+
 def main() -> None:
     token = os.environ.get("TELEGRAM_BOT_TOKEN")
     if not token:
@@ -191,7 +209,18 @@ def main() -> None:
     application.add_handler(CommandHandler("setlog", setlog))
     application.add_handler(CommandHandler("whois", whois))
     application.add_handler(
-        MessageHandler(filters.ChatType.GROUPS & ~filters.COMMAND, track_member)
+        MessageHandler(
+            filters.ChatType.GROUPS & filters.StatusUpdate.NEW_CHAT_MEMBERS,
+            track_new_members,
+        )
+    )
+    application.add_handler(
+        MessageHandler(
+            filters.ChatType.GROUPS
+            & ~filters.COMMAND
+            & ~filters.StatusUpdate.NEW_CHAT_MEMBERS,
+            track_member,
+        )
     )
 
     logger.info("Bot iniciado. Esperando mensajes...")
