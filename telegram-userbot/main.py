@@ -124,6 +124,14 @@ async def _download_media(event, key) -> None:
         MAX_MEDIA_CACHE_ENTRIES,
     )
 
+    logger.info(
+        "Media cacheada: key=%s event.id=%s chat_id=%s read_hasta=%s",
+        key,
+        event.id,
+        event.chat_id,
+        read_state.get(event.chat_id, 0),
+    )
+
     # Si para cuando termina de descargarse el mensaje ya se había
     # marcado como leído (chat abierto en el momento de recibirlo), el
     # evento MessageRead ya pasó de largo sin encontrar nada en la
@@ -206,6 +214,14 @@ async def on_new_message(event) -> None:
 
 @client.on(events.MessageRead)
 async def on_read(event) -> None:
+
+    logger.info(
+        "MessageRead: chat_id=%s inbox=%s max_id=%s is_channel=%s",
+        event.chat_id,
+        event.inbox,
+        event.max_id,
+        event.is_channel,
+    )
 
     if not event.inbox:
         return
