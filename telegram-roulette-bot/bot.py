@@ -73,7 +73,7 @@ async def ruleta(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         None, build_spin_video, numbers, winning_index
     )
 
-    sent = await update.message.reply_video(
+    await update.message.reply_video(
         video=InputFile(io.BytesIO(video_bytes), filename="ruleta.mp4"),
         caption="🎰 ¡Girando la ruleta!",
         supports_streaming=True,
@@ -81,10 +81,8 @@ async def ruleta(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
 
     await asyncio.sleep(total_duration_ms / 1000)
 
-    await context.bot.edit_message_caption(
-        chat_id=sent.chat_id,
-        message_id=sent.message_id,
-        caption=f"🎉 ¡La ruleta se detuvo en *{result}*!",
+    await update.message.reply_text(
+        f"🎉 ¡La ruleta se detuvo en *{result}*!",
         parse_mode=ParseMode.MARKDOWN,
     )
 
