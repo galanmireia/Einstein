@@ -49,6 +49,30 @@ GROUP_CHAT_TYPES = (ChatType.GROUP, ChatType.SUPERGROUP)
 # has run /unirme. It resets if the bot restarts or redeploys.
 chat_members: dict[int, dict[int, str]] = {}
 
+# Optional allowlist restricting who can spin the roulette. Set via the
+# ALLOWED_USERS env var: a comma-separated list of usernames (with or
+# without "@") and/or numeric user IDs, e.g. "mireia_g,123456789". Empty
+# (the default) means anyone can use the bot.
+_raw_allowed_users = os.environ.get("ALLOWED_USERS", "")
+ALLOWED_USER_IDS = {
+    int(item) for item in _raw_allowed_users.split(",") if item.strip().lstrip("-").isdigit()
+}
+ALLOWED_USERNAMES = {
+    item.strip().lstrip("@").lower()
+    for item in _raw_allowed_users.split(",")
+    if item.strip() and not item.strip().lstrip("-").isdigit()
+}
+
+
+def _is_allowed(user) -> bool:
+    if not ALLOWED_USER_IDS and not ALLOWED_USERNAMES:
+        return True
+    if user.id in ALLOWED_USER_IDS:
+        return True
+    if user.username and user.username.lower() in ALLOWED_USERNAMES:
+        return True
+    return False
+
 # Inline mode needs a public URL for the video/thumbnail (Telegram fetches
 # them itself), so generated media is cached here briefly and served by a
 # small web server running alongside the bot. media_id -> (bytes, content_type, expires_at)
@@ -148,6 +172,10 @@ async def unirme(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
 
 
 async def ruleta_gente(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    if not _is_allowed(update.effective_user):
+        await update.message.reply_text("🔒 Este bot es privado, no puedes usarlo.")
+        return
+
     if not update.effective_chat or update.effective_chat.type not in GROUP_CHAT_TYPES:
         await update.message.reply_text("Este comando es para usarlo dentro de un grupo.")
         return
@@ -254,6 +282,10 @@ async def spin_once(update: Update, segments: list[Segment]) -> Segment:
 
 
 async def ruleta(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    if not _is_allowed(update.effective_user):
+        await update.message.reply_text("🔒 Este bot es privado, no puedes usarlo.")
+        return
+
     segments = parse_custom_segments(context.args)
 
     if segments is None and context.args:
@@ -355,7 +387,7 @@ def _cleanup_pending_results() -> None:
 
 
 async def inline_ruleta(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    if not PUBLIC_BASE_URL:
+    if not PUBLIC_BASE_URL or not _is_allowed(update.effective_user):
         await update.inline_query.answer([], cache_time=0)
         return
 
