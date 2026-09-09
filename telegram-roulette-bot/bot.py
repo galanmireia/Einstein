@@ -31,12 +31,12 @@ class Segment:
 
 
 DEFAULT_SEGMENTS = [
-    Segment("5", "🎉 ¡La ruleta se detuvo en *5*!", kind="number", value=5),
-    Segment("10", "🎉 ¡La ruleta se detuvo en *10*!", kind="number", value=10),
-    Segment("15", "🎉 ¡La ruleta se detuvo en *15*!", kind="number", value=15),
-    Segment("20", "🎉 ¡La ruleta se detuvo en *20*!", kind="number", value=20),
-    Segment("+5", "🎉 ¡*+5* puntos extra! Sigue girando...", kind="bonus", value=5),
-    Segment("TIRA", "🔁 ¡Vuelve a tirar!", kind="respin", value=0),
+    Segment("+5", "🎉 ¡*+5* puntos!", kind="number", value=5),
+    Segment("+10", "🎉 ¡*+10* puntos!", kind="number", value=10),
+    Segment("+15", "🎉 ¡*+15* puntos!", kind="number", value=15),
+    Segment("+20", "🎉 ¡*+20* puntos!", kind="number", value=20),
+    Segment("+5*", "🎉 ¡*+5* puntos! 🔁 Y vuelve a tirar...", kind="bonus", value=5),
+    Segment("+10*", "🎉 ¡*+10* puntos! 🔁 Y vuelve a tirar...", kind="bonus", value=10),
     Segment(
         "PREMIO",
         "🏆🦶 ¡Premio especial! Tienes que mandar una foto de tus pies 😂",
@@ -51,7 +51,9 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     await update.message.reply_text(
         "¡Hola! Soy la ruleta 🎰\n\n"
         f"Usa /ruleta para girar la ruleta por defecto: {default_labels}.\n"
-        "Si sale TIRA o +5 la ruleta gira otra vez sola y suma los puntos.\n\n"
+        "Las casillas con * suman puntos Y hacen que vuelva a girar sola "
+        "(puede encadenarse varias veces) hasta caer en una casilla normal, "
+        "y entonces se suman todos los puntos conseguidos.\n\n"
         "También puedes darme tus propios números, por ejemplo:\n"
         "/ruleta 5 10 15 20 25"
     )
