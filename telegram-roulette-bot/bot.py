@@ -25,28 +25,36 @@ MAX_RESPINS = 5
 @dataclass
 class Segment:
     wheel_label: str
-    reveal_text: str
+    reveal_text: str = ""
     kind: str = "number"  # "number" | "bonus" | "respin" | "prize"
     value: int = 0
+    payment: bool = False
+
+
+FUNNY_PAYMENT_LINES = [
+    "😂 ¡Qué suertudo/a eres! Te toca pagar *{v}€*",
+    "💸 Mala suerte... ¡pagas *{v}€*!",
+    "🤑 Se te ve forrado/a, paga *{v}€*",
+    "😅 Vaya papelón... pagas *{v}€*",
+    "🙃 La ruleta no perdona: *{v}€* pa'l bote",
+    "🥲 Hoy invitas tú: *{v}€*",
+]
+
+
+def _payment_message(value: int, respin: bool) -> str:
+    text = random.choice(FUNNY_PAYMENT_LINES).format(v=value)
+    if respin:
+        text += " 🔁 Y encima vuelves a tirar..."
+    return text
 
 
 DEFAULT_SEGMENTS = [
-    Segment("+5", "🎉 ¡*+5* puntos!", kind="number", value=5),
-    Segment("+10", "🎉 ¡*+10* puntos!", kind="number", value=10),
-    Segment("+15", "🎉 ¡*+15* puntos!", kind="number", value=15),
-    Segment("+20", "🎉 ¡*+20* puntos!", kind="number", value=20),
-    Segment(
-        "+5\nTIRA\nOTRA VEZ",
-        "🎉 ¡*+5* puntos! 🔁 Y tira otra vez...",
-        kind="bonus",
-        value=5,
-    ),
-    Segment(
-        "+10\nTIRA\nOTRA VEZ",
-        "🎉 ¡*+10* puntos! 🔁 Y tira otra vez...",
-        kind="bonus",
-        value=10,
-    ),
+    Segment("+5", kind="number", value=5, payment=True),
+    Segment("+10", kind="number", value=10, payment=True),
+    Segment("+15", kind="number", value=15, payment=True),
+    Segment("+20", kind="number", value=20, payment=True),
+    Segment("+5\nTIRA\nOTRA VEZ", kind="bonus", value=5, payment=True),
+    Segment("+10\nTIRA\nOTRA VEZ", kind="bonus", value=10, payment=True),
     Segment(
         "PREMIO",
         "🏆🦶 ¡Premio especial! Tienes que mandar una foto de tus pies 😂",
@@ -62,11 +70,11 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     )
     await update.message.reply_text(
         "¡Hola! Soy la ruleta 🎰\n\n"
-        f"Usa /ruleta para girar la ruleta por defecto: {default_labels}.\n"
-        "Las casillas que ponen \"TIRA OTRA VEZ\" suman sus puntos Y hacen que "
-        "gire otra vez sola (puede encadenarse varias veces seguidas) hasta "
-        "caer en una casilla normal, y entonces se suman todos los puntos "
-        "conseguidos.\n\n"
+        f"Usa /ruleta para girar la ruleta por defecto: {default_labels} (dinero a pagar 💸).\n"
+        "Las casillas que ponen \"TIRA OTRA VEZ\" te hacen pagar Y además "
+        "gira otra vez sola (puede encadenarse varias veces seguidas) hasta "
+        "caer en una casilla normal, y entonces se suma todo lo que tienes "
+        "que pagar.\n\n"
         "También puedes darme tus propios números, por ejemplo:\n"
         "/ruleta 5 10 15 20 25"
     )
@@ -116,7 +124,11 @@ async def spin_once(update: Update, segments: list[Segment]) -> Segment:
 
     await asyncio.sleep(total_duration_ms / 1000)
 
-    await update.message.reply_text(winner.reveal_text, parse_mode=ParseMode.MARKDOWN)
+    if winner.payment:
+        text = _payment_message(winner.value, respin=winner.kind == "bonus")
+    else:
+        text = winner.reveal_text
+    await update.message.reply_text(text, parse_mode=ParseMode.MARKDOWN)
 
     return winner
 
@@ -147,6 +159,7 @@ async def ruleta(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
 
     total = 0
     history: list[str] = []
+    is_payment = False
 
     for _ in range(MAX_RESPINS):
         winner = await spin_once(update, segments)
@@ -155,7 +168,8 @@ async def ruleta(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
             return
 
         total += winner.value
-        history.append(winner.wheel_label)
+        history.append(winner.wheel_label.replace("\n", " "))
+        is_payment = is_payment or winner.payment
 
         if winner.kind == "number":
             break
@@ -165,8 +179,10 @@ async def ruleta(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
 
     if len(history) > 1:
         breakdown = " + ".join(history)
+        label = "Total a pagar" if is_payment else "Total acumulado"
+        suffix = "€" if is_payment else ""
         await update.message.reply_text(
-            f"🧮 Total acumulado ({breakdown}) = *{total}*",
+            f"🧮 {label} ({breakdown}) = *{total}{suffix}*",
             parse_mode=ParseMode.MARKDOWN,
         )
 
