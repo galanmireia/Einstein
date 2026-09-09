@@ -69,18 +69,15 @@ async def ruleta(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     result = numbers[winning_index]
 
     loop = asyncio.get_running_loop()
-    video_bytes, total_duration_ms, width, height = await loop.run_in_executor(
-        None, build_spin_video, numbers, winning_index
+    video_bytes, _total_duration_ms, _width, _height, thumbnail_bytes = (
+        await loop.run_in_executor(None, build_spin_video, numbers, winning_index)
     )
 
-    await update.message.reply_video(
-        video=InputFile(io.BytesIO(video_bytes), filename="ruleta.mp4"),
-        caption=f"🎰🎉 ¡La ruleta se detuvo en *{result}*!",
+    await update.message.reply_document(
+        document=InputFile(io.BytesIO(video_bytes), filename="ruleta.mp4"),
+        thumbnail=InputFile(io.BytesIO(thumbnail_bytes), filename="ruleta.png"),
+        caption=f"🎰🎉 ¡La ruleta se detuvo en *{result}*! Pulsa para ver el giro.",
         parse_mode=ParseMode.MARKDOWN,
-        duration=round(total_duration_ms / 1000),
-        width=width,
-        height=height,
-        supports_streaming=True,
     )
 
 

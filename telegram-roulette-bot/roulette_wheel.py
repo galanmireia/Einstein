@@ -98,7 +98,7 @@ def build_spin_video(
     frame_count: int = 28,
     fps: int = 20,
     hold_seconds: float = 1.5,
-) -> tuple[bytes, int, int, int]:
+) -> tuple[bytes, int, int, int, bytes]:
     import os
     import subprocess
     import tempfile
@@ -132,6 +132,10 @@ def build_spin_video(
     video_frames.extend([video_frames[-1]] * hold_repeat)
 
     total_duration_ms = int(len(video_frames) * ms_per_video_frame)
+
+    thumbnail_buffer = io.BytesIO()
+    video_frames[-1].save(thumbnail_buffer, format="PNG")
+    thumbnail_bytes = thumbnail_buffer.getvalue()
 
     silent_path = tempfile.mktemp(suffix=".mp4")
     final_path = tempfile.mktemp(suffix=".mp4")
@@ -198,4 +202,4 @@ def build_spin_video(
         for path in (silent_path, final_path):
             if os.path.exists(path):
                 os.remove(path)
-    return video_bytes, total_duration_ms, SIZE, SIZE
+    return video_bytes, total_duration_ms, SIZE, SIZE, thumbnail_bytes
