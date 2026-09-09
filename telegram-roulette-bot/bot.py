@@ -3,7 +3,7 @@ import logging
 import os
 import random
 
-from telegram import Update
+from telegram import InputFile, Update
 from telegram.constants import ParseMode
 from telegram.ext import Application, CommandHandler, ContextTypes
 
@@ -73,7 +73,7 @@ async def ruleta(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     )
 
     sent = await update.message.reply_animation(
-        animation=gif_buffer,
+        animation=InputFile(gif_buffer, filename="ruleta.gif"),
         caption="🎰 ¡Girando la ruleta!",
     )
 
