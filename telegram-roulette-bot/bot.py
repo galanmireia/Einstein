@@ -84,7 +84,7 @@ PUBLIC_BASE_URL = os.environ.get("PUBLIC_BASE_URL", "").rstrip("/")
 # the chosen_inline_result handler know what was sent and whether it needs
 # to chain another spin by editing the inline message in place, since
 # inline mode gives no chat_id to send a follow-up message with.
-pending_inline_results: dict[str, tuple["Segment", int, float]] = {}
+pending_inline_results: dict[str, tuple["Segment", int, str, float]] = {}
 
 
 @dataclass
@@ -419,8 +419,12 @@ async def inline_ruleta(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
     _cleanup_media_cache()
     _cleanup_pending_results()
 
+    query = update.inline_query.query.strip().lower()
+    difficulty_key = query if query in DIFFICULTIES else "e"
+    difficulty_name, segments = DIFFICULTIES[difficulty_key]
+
     winner, video_url, thumb_url, total_duration_ms, width, height = (
-        await _generate_spin_media(DEFAULT_SEGMENTS)
+        await _generate_spin_media(segments)
     )
 
     if winner.payment:
@@ -432,13 +436,14 @@ async def inline_ruleta(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
     pending_inline_results[result_id] = (
         winner,
         total_duration_ms,
+        difficulty_key,
         time.time() + MEDIA_TTL_SECONDS,
     )
 
     # Telegram only assigns an inline_message_id (needed to edit this
     # message later, for the auto-respin chain) if it has a reply_markup.
     keyboard = InlineKeyboardMarkup(
-        [[InlineKeyboardButton("🎰 Girar otra vez", switch_inline_query_current_chat="")]]
+        [[InlineKeyboardButton("🎰 Girar otra vez", switch_inline_query_current_chat=difficulty_key)]]
     )
 
     result = InlineQueryResultVideo(
@@ -446,7 +451,8 @@ async def inline_ruleta(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
         video_url=video_url,
         mime_type="video/mp4",
         thumbnail_url=thumb_url,
-        title="🎰 Girar la ruleta",
+        title=f"🎰 Girar la ruleta ({difficulty_name})",
+        description="Escribe e / m / h después del bot para elegir dificultad",
         caption=caption,
         parse_mode=ParseMode.MARKDOWN,
         video_duration=round(total_duration_ms / 1000),
@@ -477,7 +483,8 @@ async def inline_result_chosen(update: Update, context: ContextTypes.DEFAULT_TYP
         )
         return
 
-    winner, total_duration_ms, _expires_at = entry
+    winner, total_duration_ms, difficulty_key, _expires_at = entry
+    _difficulty_name, segments = DIFFICULTIES[difficulty_key]
     logger.info("Ganador inicial: %s (kind=%s)", winner.wheel_label, winner.kind)
 
     total = winner.value
@@ -493,7 +500,7 @@ async def inline_result_chosen(update: Update, context: ContextTypes.DEFAULT_TYP
         await asyncio.sleep(wait_ms / 1000)
 
         new_winner, video_url, thumb_url, wait_ms, width, height = (
-            await _generate_spin_media(DEFAULT_SEGMENTS)
+            await _generate_spin_media(segments)
         )
 
         if new_winner.payment:
