@@ -3,11 +3,18 @@ import io
 import logging
 import os
 import random
+import re
 from dataclasses import dataclass
 
 from telegram import InputFile, Update
-from telegram.constants import ParseMode
-from telegram.ext import Application, CommandHandler, ContextTypes
+from telegram.constants import ChatType, ParseMode
+from telegram.ext import (
+    Application,
+    CommandHandler,
+    ContextTypes,
+    MessageHandler,
+    filters,
+)
 
 from roulette_wheel import build_spin_video
 
@@ -20,6 +27,15 @@ logger = logging.getLogger(__name__)
 MIN_OPTIONS = 2
 MAX_OPTIONS = 10
 MAX_RESPINS = 5
+WHEEL_NAME_MAX_LEN = 10
+
+GROUP_CHAT_TYPES = (ChatType.GROUP, ChatType.SUPERGROUP)
+
+# In-memory per-chat member registry: chat_id -> {user_id: display_name}.
+# Telegram's Bot API has no method to list a group's full membership, so this
+# only ever contains people the bot has actually seen post, plus anyone who
+# has run /unirme. It resets if the bot restarts or redeploys.
+chat_members: dict[int, dict[int, str]] = {}
 
 
 @dataclass
@@ -64,6 +80,81 @@ DEFAULT_SEGMENTS = [
 ]
 
 
+def _display_name(user) -> str:
+    if user.username:
+        return f"@{user.username}"
+    return user.first_name or "Alguien"
+
+
+def _register_member(chat_id: int, user) -> None:
+    chat_members.setdefault(chat_id, {})[user.id] = _display_name(user)
+
+
+def _wheel_safe_label(name: str) -> str:
+    if len(name) <= WHEEL_NAME_MAX_LEN:
+        return name
+    return name[: WHEEL_NAME_MAX_LEN - 1] + "…"
+
+
+def _escape_markdown(text: str) -> str:
+    return re.sub(r"([_*`\[])", r"\\\1", text)
+
+
+async def track_member(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    if (
+        update.effective_chat
+        and update.effective_chat.type in GROUP_CHAT_TYPES
+        and update.effective_user
+        and not update.effective_user.is_bot
+    ):
+        _register_member(update.effective_chat.id, update.effective_user)
+
+
+async def unirme(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    if not update.effective_chat or update.effective_chat.type not in GROUP_CHAT_TYPES:
+        await update.message.reply_text("Este comando es para usarlo dentro de un grupo.")
+        return
+
+    _register_member(update.effective_chat.id, update.effective_user)
+    count = len(chat_members.get(update.effective_chat.id, {}))
+    await update.message.reply_text(
+        f"✅ ¡Apuntado/a! Ahora hay {count} personas en la ruleta de este grupo."
+    )
+
+
+async def ruleta_gente(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    if not update.effective_chat or update.effective_chat.type not in GROUP_CHAT_TYPES:
+        await update.message.reply_text("Este comando es para usarlo dentro de un grupo.")
+        return
+
+    members = chat_members.get(update.effective_chat.id, {})
+
+    if len(members) < MIN_OPTIONS:
+        await update.message.reply_text(
+            "⚠️ Todavía no tengo suficientes nombres para esta ruleta.\n"
+            "Telegram no deja a los bots ver la lista completa de miembros de "
+            "un grupo, así que solo puedo apuntar a quien escribe algo aquí.\n"
+            "Escribe cualquier mensaje en el grupo o usa /unirme para "
+            "apuntarte, y pide a los demás que hagan lo mismo."
+        )
+        return
+
+    names = list(members.values())
+    if len(names) > MAX_OPTIONS:
+        names = random.sample(names, MAX_OPTIONS)
+
+    segments = [
+        Segment(
+            _wheel_safe_label(name),
+            f"🎉 ¡Le toca a *{_escape_markdown(name)}*!",
+            kind="number",
+            value=0,
+        )
+        for name in names
+    ]
+    await spin_once(update, segments)
+
+
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     default_labels = ", ".join(
         segment.wheel_label.replace("\n", " ") for segment in DEFAULT_SEGMENTS
@@ -75,6 +166,10 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         "gira otra vez sola (puede encadenarse varias veces seguidas) hasta "
         "caer en una casilla normal, y entonces se suma todo lo que tienes "
         "que pagar.\n\n"
+        "En un grupo también puedes usar /ruletagente para que elija al azar "
+        "entre las personas que han escrito ahí o se han apuntado con "
+        "/unirme (Telegram no deja a los bots ver la lista completa de "
+        "miembros).\n\n"
         "También puedes darme tus propios números, por ejemplo:\n"
         "/ruleta 5 10 15 20 25"
     )
@@ -198,6 +293,11 @@ def main() -> None:
 
     application.add_handler(CommandHandler("start", start))
     application.add_handler(CommandHandler("ruleta", ruleta))
+    application.add_handler(CommandHandler("ruletagente", ruleta_gente))
+    application.add_handler(CommandHandler("unirme", unirme))
+    application.add_handler(
+        MessageHandler(filters.ChatType.GROUPS & ~filters.COMMAND, track_member)
+    )
 
     logger.info("Bot iniciado. Esperando comandos...")
     application.run_polling(allowed_updates=Update.ALL_TYPES)
