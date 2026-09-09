@@ -9,7 +9,14 @@ import uuid
 from dataclasses import dataclass
 
 from aiohttp import web
-from telegram import InlineQueryResultVideo, InputFile, InputMediaVideo, Update
+from telegram import (
+    InlineKeyboardButton,
+    InlineKeyboardMarkup,
+    InlineQueryResultVideo,
+    InputFile,
+    InputMediaVideo,
+    Update,
+)
 from telegram.constants import ChatType, ParseMode
 from telegram.ext import (
     Application,
@@ -371,6 +378,12 @@ async def inline_ruleta(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
         time.time() + MEDIA_TTL_SECONDS,
     )
 
+    # Telegram only assigns an inline_message_id (needed to edit this
+    # message later, for the auto-respin chain) if it has a reply_markup.
+    keyboard = InlineKeyboardMarkup(
+        [[InlineKeyboardButton("🎰 Girar otra vez", switch_inline_query_current_chat="")]]
+    )
+
     result = InlineQueryResultVideo(
         id=result_id,
         video_url=video_url,
@@ -382,6 +395,7 @@ async def inline_ruleta(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
         video_duration=round(total_duration_ms / 1000),
         video_width=width,
         video_height=height,
+        reply_markup=keyboard,
     )
 
     await update.inline_query.answer([result], cache_time=0, is_personal=True)
