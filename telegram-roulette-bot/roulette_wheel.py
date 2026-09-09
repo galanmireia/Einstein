@@ -3,10 +3,10 @@ import math
 
 from PIL import Image, ImageDraw, ImageFont
 
-SIZE = 500
+SIZE = 512
 CENTER = SIZE // 2
-OUTER_RADIUS = 230
-LABEL_RADIUS = 175
+OUTER_RADIUS = 236
+LABEL_RADIUS = 179
 BORDER_COLOR = (30, 30, 30, 255)
 POINTER_COLOR = (255, 209, 0, 255)
 HUB_COLOR = (40, 40, 40, 255)
@@ -98,7 +98,7 @@ def build_spin_video(
     frame_count: int = 28,
     fps: int = 20,
     hold_seconds: float = 1.5,
-) -> tuple[bytes, int]:
+) -> tuple[bytes, int, int, int]:
     import os
     import subprocess
     import tempfile
@@ -142,8 +142,9 @@ def build_spin_video(
             for frame in video_frames:
                 writer.append_data(np.array(frame))
 
-        # Telegram auto-loops silent videos like GIFs. Muxing in a silent
-        # audio track makes it treat this as a regular video that plays once.
+        # Telegram auto-loops videos it detects as having no sound, like GIFs.
+        # A digitally-silent (all-zero) audio track still counts as "no
+        # sound", so mux in a very quiet noise track instead of true silence.
         ffmpeg_exe = imageio_ffmpeg.get_ffmpeg_exe()
         subprocess.run(
             [
@@ -156,11 +157,13 @@ def build_spin_video(
                 "-t",
                 f"{total_duration_ms / 1000:.3f}",
                 "-i",
-                "anullsrc=r=44100:cl=stereo",
+                "anoisesrc=color=pink:amplitude=0.03",
                 "-c:v",
                 "copy",
                 "-c:a",
                 "aac",
+                "-b:a",
+                "64k",
                 "-shortest",
                 final_path,
             ],
@@ -174,4 +177,4 @@ def build_spin_video(
         for path in (silent_path, final_path):
             if os.path.exists(path):
                 os.remove(path)
-    return video_bytes, total_duration_ms
+    return video_bytes, total_duration_ms, SIZE, SIZE

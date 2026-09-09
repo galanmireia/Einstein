@@ -69,13 +69,16 @@ async def ruleta(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     result = numbers[winning_index]
 
     loop = asyncio.get_running_loop()
-    video_bytes, total_duration_ms = await loop.run_in_executor(
+    video_bytes, total_duration_ms, width, height = await loop.run_in_executor(
         None, build_spin_video, numbers, winning_index
     )
 
     await update.message.reply_video(
         video=InputFile(io.BytesIO(video_bytes), filename="ruleta.mp4"),
         caption="🎰 ¡Girando la ruleta!",
+        duration=round(total_duration_ms / 1000),
+        width=width,
+        height=height,
         supports_streaming=True,
     )
 
