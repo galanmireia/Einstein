@@ -1,6 +1,8 @@
 import logging
 import os
 import re
+from dataclasses import dataclass
+from datetime import datetime, timezone
 
 from telegram import Update
 from telegram.constants import ChatType, ParseMode
@@ -20,9 +22,22 @@ logger = logging.getLogger(__name__)
 
 GROUP_CHAT_TYPES = (ChatType.GROUP, ChatType.SUPERGROUP)
 
-# In-memory tracking: chat_id -> user_id -> (display_name, username).
-# Resets if the bot restarts or redeploys.
-tracked_identities: dict[int, dict[int, tuple[str, str | None]]] = {}
+
+@dataclass
+class HistoryEntry:
+    name: str
+    username: str | None
+    seen_at: str
+
+
+# Only ever populated for people the bot has actually seen post in a group
+# it's in. Resets if the bot restarts or redeploys. No lookup is possible
+# for anyone the bot hasn't observed this way.
+identity_history: dict[int, list[HistoryEntry]] = {}
+
+# Every username ever seen for a user_id maps here (lowercase), so /whois
+# still finds someone even by a username they've since changed away from.
+username_index: dict[str, int] = {}
 
 # Single global destination chat for change notifications, set via /setlog.
 # If unset, notifications are posted in the same group where the change
@@ -48,9 +63,11 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         "1️⃣ Añádeme a los grupos que quieras vigilar.\n"
         "2️⃣ (Opcional) Añádeme también a un grupo de avisos y escribe /setlog "
         "ahí dentro — así todos los cambios se notifican en ese grupo en vez "
-        "de en el grupo original.\n\n"
-        "Solo detecto cambios de gente que escribe algo después de que me "
-        "hayas añadido; no puedo ver un historial previo a eso."
+        "de en el grupo original.\n"
+        "3️⃣ Usa /whois @usuario para ver el ID y el historial que tengo "
+        "guardado de alguien.\n\n"
+        "Solo puedo ver a gente que ha escrito algo en un grupo donde estoy "
+        "añadido — no tengo datos de nadie más."
     )
 
 
@@ -68,6 +85,54 @@ async def setlog(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     )
 
 
+async def whois(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    if not update.effective_chat or update.effective_chat.type not in GROUP_CHAT_TYPES:
+        await update.message.reply_text("Este comando es para usarlo dentro de un grupo.")
+        return
+
+    member = await context.bot.get_chat_member(
+        update.effective_chat.id, update.effective_user.id
+    )
+    if member.status not in ("administrator", "creator"):
+        await update.message.reply_text(
+            "⚠️ Solo los administradores del grupo pueden usar /whois."
+        )
+        return
+
+    if not context.args:
+        await update.message.reply_text("Uso: /whois @usuario")
+        return
+
+    query = context.args[0].lstrip("@").lower()
+    user_id = username_index.get(query)
+
+    if user_id is None or user_id not in identity_history:
+        await update.message.reply_text(
+            "⚠️ No tengo datos de ese usuario. Solo conozco a quien ha "
+            "escrito en un grupo donde estoy añadido."
+        )
+        return
+
+    history = identity_history[user_id]
+    current = history[-1]
+    current_username = f"@{current.username}" if current.username else "_(sin usuario)_"
+
+    lines = [
+        f"🆔 ID: `{user_id}`",
+        f"📛 Nombre actual: *{_escape_markdown(current.name)}*",
+        f"🔗 Usuario actual: {current_username}",
+        "",
+        "🕓 Historial:",
+    ]
+    for entry in history:
+        entry_username = f"@{entry.username}" if entry.username else "(sin usuario)"
+        lines.append(
+            f"• {entry.seen_at} → {_escape_markdown(entry.name)}, {entry_username}"
+        )
+
+    await update.message.reply_text("\n".join(lines), parse_mode=ParseMode.MARKDOWN)
+
+
 async def track_member(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     chat = update.effective_chat
     user = update.effective_user
@@ -76,29 +141,33 @@ async def track_member(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
         return
 
     current_name, current_username = _current_identity(user)
-    chat_identities = tracked_identities.setdefault(chat.id, {})
-    previous = chat_identities.get(user.id)
-    chat_identities[user.id] = (current_name, current_username)
+    history = identity_history.setdefault(user.id, [])
+    previous = history[-1] if history else None
+
+    if current_username:
+        username_index[current_username.lower()] = user.id
+
+    if previous is not None and previous.name == current_name and previous.username == current_username:
+        return
+
+    now = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
+    history.append(HistoryEntry(current_name, current_username, now))
 
     if previous is None:
         return
 
-    previous_name, previous_username = previous
     changes = []
 
-    if previous_name != current_name:
+    if previous.name != current_name:
         changes.append(
-            f"📝 Nombre: *{_escape_markdown(previous_name)}* → "
+            f"📝 Nombre: *{_escape_markdown(previous.name)}* → "
             f"*{_escape_markdown(current_name)}*"
         )
 
-    if previous_username != current_username:
-        old_display = f"@{previous_username}" if previous_username else "_(sin usuario)_"
+    if previous.username != current_username:
+        old_display = f"@{previous.username}" if previous.username else "_(sin usuario)_"
         new_display = f"@{current_username}" if current_username else "_(sin usuario)_"
         changes.append(f"🔗 Usuario: {old_display} → {new_display}")
-
-    if not changes:
-        return
 
     chat_title = _escape_markdown(chat.title or "este grupo")
     text = f"🔄 Cambio detectado en *{chat_title}*\n" + "\n".join(changes)
@@ -120,6 +189,7 @@ def main() -> None:
 
     application.add_handler(CommandHandler("start", start))
     application.add_handler(CommandHandler("setlog", setlog))
+    application.add_handler(CommandHandler("whois", whois))
     application.add_handler(
         MessageHandler(filters.ChatType.GROUPS & ~filters.COMMAND, track_member)
     )
