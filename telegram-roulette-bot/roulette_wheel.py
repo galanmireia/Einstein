@@ -28,7 +28,7 @@ def _font(size: int) -> ImageFont.ImageFont:
 
 
 def _font_size_for(labels: list[str], count: int) -> int:
-    max_len = max(len(label) for label in labels)
+    max_len = max(len(line) for label in labels for line in label.split("\n"))
     size = 32
     if count > 6:
         size -= 4
@@ -55,13 +55,21 @@ def _build_base_wheel(labels: list[str]) -> Image.Image:
         draw.pieslice(bbox, start, end, fill=color, outline=BORDER_COLOR, width=3)
 
         mid_angle = start + sector_angle / 2
-        text_bbox = draw.textbbox((0, 0), label, font=font)
-        text_w = text_bbox[2] - text_bbox[0]
-        text_h = text_bbox[3] - text_bbox[1]
+        lines = label.split("\n")
+        line_boxes = [draw.textbbox((0, 0), line, font=font) for line in lines]
+        line_widths = [box[2] - box[0] for box in line_boxes]
+        line_heights = [box[3] - box[1] for box in line_boxes]
+        line_gap = 2
+        text_w = max(line_widths)
+        text_h = sum(line_heights) + line_gap * (len(lines) - 1)
 
         label_img = Image.new("RGBA", (text_w + 12, text_h + 12), (0, 0, 0, 0))
         label_draw = ImageDraw.Draw(label_img)
-        label_draw.text((6 - text_bbox[0], 6 - text_bbox[1]), label, font=font, fill=(255, 255, 255, 255))
+        y = 6
+        for line, box, line_w, line_h in zip(lines, line_boxes, line_widths, line_heights):
+            x = 6 + (text_w - line_w) // 2 - box[0]
+            label_draw.text((x, y - box[1]), line, font=font, fill=(255, 255, 255, 255))
+            y += line_h + line_gap
 
         rotation = -(mid_angle + 90)
         rotated_label = label_img.rotate(rotation, expand=True, resample=Image.BICUBIC)
