@@ -27,23 +27,34 @@ def _font(size: int) -> ImageFont.ImageFont:
         return ImageFont.load_default()
 
 
-def _build_base_wheel(numbers: list[int]) -> Image.Image:
+def _font_size_for(labels: list[str], count: int) -> int:
+    max_len = max(len(label) for label in labels)
+    size = 32
+    if count > 6:
+        size -= 4
+    if max_len > 2:
+        size -= 4
+    if max_len > 4:
+        size -= 4
+    return max(size, 14)
+
+
+def _build_base_wheel(labels: list[str]) -> Image.Image:
     wheel = Image.new("RGBA", (SIZE, SIZE), (0, 0, 0, 0))
     draw = ImageDraw.Draw(wheel)
 
-    count = len(numbers)
+    count = len(labels)
     sector_angle = 360 / count
     bbox = (CENTER - OUTER_RADIUS, CENTER - OUTER_RADIUS, CENTER + OUTER_RADIUS, CENTER + OUTER_RADIUS)
-    font = _font(30)
+    font = _font(_font_size_for(labels, count))
 
-    for i, number in enumerate(numbers):
+    for i, label in enumerate(labels):
         start = i * sector_angle
         end = start + sector_angle
         color = PALETTE[i % len(PALETTE)]
         draw.pieslice(bbox, start, end, fill=color, outline=BORDER_COLOR, width=3)
 
         mid_angle = start + sector_angle / 2
-        label = str(number)
         text_bbox = draw.textbbox((0, 0), label, font=font)
         text_w = text_bbox[2] - text_bbox[0]
         text_h = text_bbox[3] - text_bbox[1]
@@ -93,7 +104,7 @@ def _ease_out_cubic(t: float) -> float:
 
 
 def build_spin_video(
-    numbers: list[int],
+    labels: list[str],
     winning_index: int,
     frame_count: int = 28,
     fps: int = 20,
@@ -107,9 +118,9 @@ def build_spin_video(
     import imageio_ffmpeg
     import numpy as np
 
-    base_wheel = _build_base_wheel(numbers)
+    base_wheel = _build_base_wheel(labels)
 
-    count = len(numbers)
+    count = len(labels)
     sector_angle = 360 / count
     sector_center = winning_index * sector_angle + sector_angle / 2
 

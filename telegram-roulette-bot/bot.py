@@ -3,6 +3,7 @@ import io
 import logging
 import os
 import random
+from dataclasses import dataclass
 
 from telegram import InputFile, Update
 from telegram.constants import ParseMode
@@ -16,61 +17,77 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-DEFAULT_NUMBERS = [5, 10, 15, 20]
-MIN_NUMBERS = 2
-MAX_NUMBERS = 10
+MIN_OPTIONS = 2
+MAX_OPTIONS = 10
+MAX_RESPINS = 5
+
+
+@dataclass
+class Segment:
+    wheel_label: str
+    reveal_text: str
+    kind: str = "number"  # "number" | "bonus" | "respin" | "prize"
+    value: int = 0
+
+
+DEFAULT_SEGMENTS = [
+    Segment("5", "🎉 ¡La ruleta se detuvo en *5*!", kind="number", value=5),
+    Segment("10", "🎉 ¡La ruleta se detuvo en *10*!", kind="number", value=10),
+    Segment("15", "🎉 ¡La ruleta se detuvo en *15*!", kind="number", value=15),
+    Segment("20", "🎉 ¡La ruleta se detuvo en *20*!", kind="number", value=20),
+    Segment("+5", "🎉 ¡*+5* puntos extra! Sigue girando...", kind="bonus", value=5),
+    Segment("TIRA", "🔁 ¡Vuelve a tirar!", kind="respin", value=0),
+    Segment(
+        "PREMIO",
+        "🏆🦶 ¡Premio especial! Tienes que mandar una foto de tus pies 😂",
+        kind="prize",
+        value=0,
+    ),
+]
 
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    default_labels = ", ".join(segment.wheel_label for segment in DEFAULT_SEGMENTS)
     await update.message.reply_text(
         "¡Hola! Soy la ruleta 🎰\n\n"
-        "Usa /ruleta para girar y obtener un número al azar entre "
-        f"{', '.join(str(n) for n in DEFAULT_NUMBERS)}.\n\n"
+        f"Usa /ruleta para girar la ruleta por defecto: {default_labels}.\n"
+        "Si sale TIRA o +5 la ruleta gira otra vez sola y suma los puntos.\n\n"
         "También puedes darme tus propios números, por ejemplo:\n"
         "/ruleta 5 10 15 20 25"
     )
 
 
-def parse_numbers(args: list[str]) -> list[int] | None:
+def parse_custom_segments(args: list[str]) -> list[Segment] | None:
     if not args:
-        return DEFAULT_NUMBERS
+        return None
 
-    numbers = []
+    segments = []
     for arg in args:
         try:
-            numbers.append(int(arg))
+            number = int(arg)
         except ValueError:
             return None
-    return numbers
-
-
-async def ruleta(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    numbers = parse_numbers(context.args)
-
-    if numbers is None:
-        await update.message.reply_text(
-            "⚠️ Solo puedo girar con números enteros. Ejemplo:\n/ruleta 5 10 15 20"
+        segments.append(
+            Segment(
+                str(number),
+                f"🎉 ¡La ruleta se detuvo en *{number}*!",
+                kind="number",
+                value=number,
+            )
         )
-        return
+    return segments
 
-    if len(numbers) < MIN_NUMBERS:
-        await update.message.reply_text(
-            "⚠️ Dame al menos dos números para poder girar la ruleta. Ejemplo:\n/ruleta 5 10 15 20"
-        )
-        return
 
-    if len(numbers) > MAX_NUMBERS:
-        await update.message.reply_text(
-            f"⚠️ Como mucho {MAX_NUMBERS} números para que la ruleta se vea bien 🙂"
-        )
-        return
-
-    winning_index = random.randrange(len(numbers))
-    result = numbers[winning_index]
+async def spin_once(update: Update, segments: list[Segment]) -> Segment:
+    winning_index = random.randrange(len(segments))
+    winner = segments[winning_index]
+    wheel_labels = [segment.wheel_label for segment in segments]
 
     loop = asyncio.get_running_loop()
     video_bytes, total_duration_ms, width, height, _thumbnail_bytes = (
-        await loop.run_in_executor(None, build_spin_video, numbers, winning_index)
+        await loop.run_in_executor(
+            None, build_spin_video, wheel_labels, winning_index
+        )
     )
 
     await update.message.reply_video(
@@ -84,10 +101,59 @@ async def ruleta(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
 
     await asyncio.sleep(total_duration_ms / 1000)
 
-    await update.message.reply_text(
-        f"🎉 ¡La ruleta se detuvo en *{result}*!",
-        parse_mode=ParseMode.MARKDOWN,
-    )
+    await update.message.reply_text(winner.reveal_text, parse_mode=ParseMode.MARKDOWN)
+
+    return winner
+
+
+async def ruleta(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    segments = parse_custom_segments(context.args)
+
+    if segments is None and context.args:
+        await update.message.reply_text(
+            "⚠️ Solo puedo girar con números enteros. Ejemplo:\n/ruleta 5 10 15 20"
+        )
+        return
+
+    if segments is None:
+        segments = DEFAULT_SEGMENTS
+
+    if len(segments) < MIN_OPTIONS:
+        await update.message.reply_text(
+            "⚠️ Dame al menos dos números para poder girar la ruleta. Ejemplo:\n/ruleta 5 10 15 20"
+        )
+        return
+
+    if len(segments) > MAX_OPTIONS:
+        await update.message.reply_text(
+            f"⚠️ Como mucho {MAX_OPTIONS} números para que la ruleta se vea bien 🙂"
+        )
+        return
+
+    total = 0
+    history: list[str] = []
+
+    for _ in range(MAX_RESPINS):
+        winner = await spin_once(update, segments)
+
+        if winner.kind == "prize":
+            return
+
+        total += winner.value
+        history.append(winner.wheel_label)
+
+        if winner.kind == "number":
+            break
+    else:
+        await update.message.reply_text("🎰 ¡Vale ya, que te quedas sin girar más! 😅")
+        return
+
+    if len(history) > 1:
+        breakdown = " + ".join(history)
+        await update.message.reply_text(
+            f"🧮 Total acumulado ({breakdown}) = *{total}*",
+            parse_mode=ParseMode.MARKDOWN,
+        )
 
 
 def main() -> None:
