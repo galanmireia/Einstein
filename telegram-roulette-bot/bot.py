@@ -390,12 +390,24 @@ async def inline_ruleta(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
 async def inline_result_chosen(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     chosen = update.chosen_inline_result
     inline_message_id = chosen.inline_message_id
+    logger.info(
+        "chosen_inline_result recibido: result_id=%s inline_message_id=%s",
+        chosen.result_id,
+        inline_message_id,
+    )
 
     entry = pending_inline_results.pop(chosen.result_id, None)
     if entry is None or not inline_message_id:
+        logger.warning(
+            "chosen_inline_result sin datos pendientes o sin inline_message_id "
+            "(entry=%s, inline_message_id=%s)",
+            entry is not None,
+            inline_message_id,
+        )
         return
 
     winner, total_duration_ms, _expires_at = entry
+    logger.info("Ganador inicial: %s (kind=%s)", winner.wheel_label, winner.kind)
 
     total = winner.value
     history = [winner.wheel_label.replace("\n", " ")]
@@ -480,6 +492,9 @@ def main() -> None:
         .build()
     )
 
+    async def log_error(update: object, context: ContextTypes.DEFAULT_TYPE) -> None:
+        logger.exception("Excepción no controlada", exc_info=context.error)
+
     application.add_handler(CommandHandler("start", start))
     application.add_handler(CommandHandler("ruleta", ruleta))
     application.add_handler(CommandHandler("ruletagente", ruleta_gente))
@@ -489,6 +504,7 @@ def main() -> None:
     application.add_handler(
         MessageHandler(filters.ChatType.GROUPS & ~filters.COMMAND, track_member)
     )
+    application.add_error_handler(log_error)
 
     logger.info("Bot iniciado. Esperando comandos...")
     application.run_polling(allowed_updates=Update.ALL_TYPES)
