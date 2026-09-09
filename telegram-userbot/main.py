@@ -92,18 +92,31 @@ async def _download_media(event, key) -> None:
     if not data:
         return
 
+    # Telegram infers photo/video/voice rendering from the filename's
+    # extension; without one (common for photos and voice notes, which
+    # carry no original filename) it falls back to a generic document.
     send_kwargs = {}
     if event.voice:
         send_kwargs["voice_note"] = True
+        filename = "voice.ogg"
     elif event.video_note:
         send_kwargs["video_note"] = True
+        filename = "video_note.mp4"
+    elif event.photo:
+        filename = "photo.jpg"
+    elif event.video:
+        filename = file_info.name or "video.mp4"
+    elif event.audio:
+        filename = file_info.name or "audio.mp3"
+    else:
+        filename = file_info.name or f"file{file_info.ext or ''}"
 
     _cache_put(
         media_cache,
         key,
         {
             "data": data,
-            "filename": getattr(file_info, "name", None),
+            "filename": filename,
             "send_kwargs": send_kwargs,
         },
         MAX_MEDIA_CACHE_ENTRIES,
