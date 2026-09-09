@@ -142,9 +142,18 @@ def build_spin_video(
             for frame in video_frames:
                 writer.append_data(np.array(frame))
 
-        # Telegram auto-loops videos it detects as having no sound, like GIFs.
-        # A digitally-silent (all-zero) audio track still counts as "no
-        # sound", so mux in a very quiet noise track instead of true silence.
+        # Telegram auto-loops videos it detects as having no (or negligible)
+        # sound, like GIFs. A real, audible sound effect avoids that, and
+        # also fits a spinning roulette: a trilling "drumroll" while it
+        # spins, then a short "ding" when it lands on the number.
+        ding_seconds = 0.4
+        spin_seconds = max(0.1, total_duration_ms / 1000 - ding_seconds)
+        filter_complex = (
+            "[1:a]tremolo=f=18:d=0.85,volume=0.35[spin];"
+            f"[2:a]afade=t=out:st=0:d={ding_seconds},volume=0.5[ding];"
+            "[spin][ding]concat=n=2:v=0:a=1[aout]"
+        )
+
         ffmpeg_exe = imageio_ffmpeg.get_ffmpeg_exe()
         subprocess.run(
             [
@@ -155,15 +164,27 @@ def build_spin_video(
                 "-f",
                 "lavfi",
                 "-t",
-                f"{total_duration_ms / 1000:.3f}",
+                f"{spin_seconds:.3f}",
                 "-i",
-                "anoisesrc=color=pink:amplitude=0.03",
+                "sine=frequency=700:sample_rate=44100",
+                "-f",
+                "lavfi",
+                "-t",
+                f"{ding_seconds:.3f}",
+                "-i",
+                "sine=frequency=1200:sample_rate=44100",
+                "-filter_complex",
+                filter_complex,
+                "-map",
+                "0:v",
+                "-map",
+                "[aout]",
                 "-c:v",
                 "copy",
                 "-c:a",
                 "aac",
                 "-b:a",
-                "64k",
+                "96k",
                 "-shortest",
                 final_path,
             ],
