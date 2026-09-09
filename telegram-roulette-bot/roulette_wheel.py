@@ -100,9 +100,11 @@ def build_spin_video(
     hold_seconds: float = 1.5,
 ) -> tuple[bytes, int]:
     import os
+    import subprocess
     import tempfile
 
     import imageio.v2 as imageio
+    import imageio_ffmpeg
     import numpy as np
 
     base_wheel = _build_base_wheel(numbers)
@@ -129,18 +131,47 @@ def build_spin_video(
     hold_repeat = max(1, round((hold_seconds * 1000) / ms_per_video_frame))
     video_frames.extend([video_frames[-1]] * hold_repeat)
 
-    tmp_path = tempfile.mktemp(suffix=".mp4")
+    total_duration_ms = int(len(video_frames) * ms_per_video_frame)
+
+    silent_path = tempfile.mktemp(suffix=".mp4")
+    final_path = tempfile.mktemp(suffix=".mp4")
     try:
         with imageio.get_writer(
-            tmp_path, fps=fps, codec="libx264", quality=8, pixelformat="yuv420p"
+            silent_path, fps=fps, codec="libx264", quality=8, pixelformat="yuv420p"
         ) as writer:
             for frame in video_frames:
                 writer.append_data(np.array(frame))
-        with open(tmp_path, "rb") as f:
+
+        # Telegram auto-loops silent videos like GIFs. Muxing in a silent
+        # audio track makes it treat this as a regular video that plays once.
+        ffmpeg_exe = imageio_ffmpeg.get_ffmpeg_exe()
+        subprocess.run(
+            [
+                ffmpeg_exe,
+                "-y",
+                "-i",
+                silent_path,
+                "-f",
+                "lavfi",
+                "-t",
+                f"{total_duration_ms / 1000:.3f}",
+                "-i",
+                "anullsrc=r=44100:cl=stereo",
+                "-c:v",
+                "copy",
+                "-c:a",
+                "aac",
+                "-shortest",
+                final_path,
+            ],
+            check=True,
+            capture_output=True,
+        )
+
+        with open(final_path, "rb") as f:
             video_bytes = f.read()
     finally:
-        if os.path.exists(tmp_path):
-            os.remove(tmp_path)
-
-    total_duration_ms = int(len(video_frames) * ms_per_video_frame)
+        for path in (silent_path, final_path):
+            if os.path.exists(path):
+                os.remove(path)
     return video_bytes, total_duration_ms
