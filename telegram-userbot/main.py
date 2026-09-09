@@ -32,11 +32,8 @@ channel_cache: "OrderedDict[tuple[int, int], dict]" = OrderedDict()
 # Multimedia utilizada por el sistema de mensajes borrados
 media_cache: "OrderedDict[object, dict]" = OrderedDict()
 
-# Fotos pendientes de enviar al marcarse como leídas
-photo_cache: "OrderedDict[object, dict]" = OrderedDict()
-
-# Fotos que ya hemos enviado para no duplicarlas
-sent_photo_keys: set = set()
+# Claves de media ya reenviada al marcarse como leída, para no duplicarla
+sent_on_read_keys: set = set()
 
 # chat_id -> último mensaje leído
 read_state: dict[int, int] = {}
@@ -126,77 +123,35 @@ async def _download_media(event, key) -> None:
     )
 
 
-async def _download_photo(event, key) -> None:
+async def _send_media_to_alerts(key, media) -> None:
     """
-    Guarda únicamente las fotos para poder enviarlas automáticamente
-    cuando el mensaje sea marcado como leído.
+    Reenvía la media (foto, vídeo, nota de voz, etc.) a Mensajes guardados
+    en cuanto se lee, usando la copia ya descargada por _download_media.
     """
 
-    if not event.photo:
-        return
-
-    file_info = event.file
-
-    if file_info is None:
-        return
-
-    if file_info.size and file_info.size > MAX_MEDIA_BYTES:
-        logger.info(
-            "Foto demasiado grande para guardar: %s",
-            key,
-        )
+    if key in sent_on_read_keys:
         return
 
     try:
-        data = await event.download_media(file=bytes)
-    except Exception:
-        logger.exception(
-            "No se pudo descargar la foto del mensaje %s",
-            key,
-        )
-        return
-
-    if not data:
-        return
-
-    _cache_put(
-        photo_cache,
-        key,
-        {
-            "data": data,
-            "filename": "photo.jpg",
-        },
-        MAX_MEDIA_CACHE_ENTRIES,
-    )
-
-
-async def _send_photo_to_alerts(key, photo) -> None:
-    """
-    Envía la foto a Mensajes guardados.
-    """
-
-    if key in sent_photo_keys:
-        return
-
-    try:
-        file_obj = BytesIO(photo["data"])
-        file_obj.name = photo.get("filename", "photo.jpg")
+        file_obj = BytesIO(media["data"])
+        file_obj.name = media.get("filename") or "archivo"
 
         await client.send_file(
             "me",
             file_obj,
+            **media["send_kwargs"],
         )
 
-        sent_photo_keys.add(key)
+        sent_on_read_keys.add(key)
 
         logger.info(
-            "Foto enviada automáticamente a Mensajes guardados: %s",
+            "Media enviada automáticamente a Mensajes guardados: %s",
             key,
         )
 
     except Exception:
         logger.exception(
-            "No se pudo enviar automáticamente la foto: %s",
+            "No se pudo enviar automáticamente la media: %s",
             key,
         )
 
@@ -236,15 +191,8 @@ async def on_new_message(event) -> None:
         MAX_CACHE_ENTRIES,
     )
 
-    # Mantener la funcionalidad original
     if event.media:
         await _download_media(event, key)
-
-    # NUEVO:
-    # Guardamos solamente las fotos para enviarlas
-    # cuando el mensaje sea marcado como leído.
-    if event.photo:
-        await _download_photo(event, key)
 
 
 @client.on(events.MessageRead)
@@ -279,14 +227,14 @@ async def on_read(event) -> None:
         else:
             key = msg_id
 
-        photo = photo_cache.get(key)
+        media = media_cache.get(key)
 
-        if photo is None:
+        if media is None:
             continue
 
-        await _send_photo_to_alerts(
+        await _send_media_to_alerts(
             key,
-            photo,
+            media,
         )
 
 
