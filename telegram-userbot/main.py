@@ -274,7 +274,7 @@ async def on_read(event) -> None:
         new_max_id + 1,
     ):
 
-        if event.chat_id is not None:
+        if event.is_channel:
             key = (chat_id, msg_id)
         else:
             key = msg_id
