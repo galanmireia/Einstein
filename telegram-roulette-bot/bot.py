@@ -9,10 +9,11 @@ import uuid
 from dataclasses import dataclass
 
 from aiohttp import web
-from telegram import InlineQueryResultVideo, InputFile, Update
+from telegram import InlineQueryResultVideo, InputFile, InputMediaVideo, Update
 from telegram.constants import ChatType, ParseMode
 from telegram.ext import (
     Application,
+    ChosenInlineResultHandler,
     CommandHandler,
     ContextTypes,
     InlineQueryHandler,
@@ -47,6 +48,12 @@ chat_members: dict[int, dict[int, str]] = {}
 media_cache: dict[str, tuple[bytes, str, float]] = {}
 MEDIA_TTL_SECONDS = 300
 PUBLIC_BASE_URL = os.environ.get("PUBLIC_BASE_URL", "").rstrip("/")
+
+# Inline query result id -> (Segment, total_duration_ms, expires_at). Lets
+# the chosen_inline_result handler know what was sent and whether it needs
+# to chain another spin by editing the inline message in place, since
+# inline mode gives no chat_id to send a follow-up message with.
+pending_inline_results: dict[str, tuple["Segment", int, float]] = {}
 
 
 @dataclass
@@ -314,14 +321,8 @@ async def handle_media_request(request: web.Request) -> web.Response:
     return web.Response(body=data, content_type=content_type)
 
 
-async def inline_ruleta(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    if not PUBLIC_BASE_URL:
-        await update.inline_query.answer([], cache_time=0)
-        return
-
-    _cleanup_media_cache()
-
-    segments = DEFAULT_SEGMENTS
+async def _generate_spin_media(segments: list[Segment]) -> tuple[Segment, str, str, int, int, int]:
+    """Spins the wheel once and returns (winner, video_url, thumb_url, duration_ms, width, height)."""
     winning_index = random.randrange(len(segments))
     winner = segments[winning_index]
     wheel_labels = [segment.wheel_label for segment in segments]
@@ -334,16 +335,47 @@ async def inline_ruleta(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
     video_id = _cache_media(video_bytes, "video/mp4")
     thumb_id = _cache_media(thumbnail_bytes, "image/png")
 
+    video_url = f"{PUBLIC_BASE_URL}/media/{video_id}.mp4"
+    thumb_url = f"{PUBLIC_BASE_URL}/media/{thumb_id}.png"
+    return winner, video_url, thumb_url, total_duration_ms, width, height
+
+
+def _cleanup_pending_results() -> None:
+    now = time.time()
+    expired = [key for key, (_, _, expires_at) in pending_inline_results.items() if expires_at < now]
+    for key in expired:
+        pending_inline_results.pop(key, None)
+
+
+async def inline_ruleta(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    if not PUBLIC_BASE_URL:
+        await update.inline_query.answer([], cache_time=0)
+        return
+
+    _cleanup_media_cache()
+    _cleanup_pending_results()
+
+    winner, video_url, thumb_url, total_duration_ms, width, height = (
+        await _generate_spin_media(DEFAULT_SEGMENTS)
+    )
+
     if winner.payment:
         caption = _payment_message(winner.value, respin=winner.kind == "bonus")
     else:
         caption = winner.reveal_text or "🎰 ¡Ruleta girada!"
 
+    result_id = uuid.uuid4().hex
+    pending_inline_results[result_id] = (
+        winner,
+        total_duration_ms,
+        time.time() + MEDIA_TTL_SECONDS,
+    )
+
     result = InlineQueryResultVideo(
-        id=uuid.uuid4().hex,
-        video_url=f"{PUBLIC_BASE_URL}/media/{video_id}.mp4",
+        id=result_id,
+        video_url=video_url,
         mime_type="video/mp4",
-        thumbnail_url=f"{PUBLIC_BASE_URL}/media/{thumb_id}.png",
+        thumbnail_url=thumb_url,
         title="🎰 Girar la ruleta",
         caption=caption,
         parse_mode=ParseMode.MARKDOWN,
@@ -353,6 +385,66 @@ async def inline_ruleta(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
     )
 
     await update.inline_query.answer([result], cache_time=0, is_personal=True)
+
+
+async def inline_result_chosen(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    chosen = update.chosen_inline_result
+    inline_message_id = chosen.inline_message_id
+
+    entry = pending_inline_results.pop(chosen.result_id, None)
+    if entry is None or not inline_message_id:
+        return
+
+    winner, total_duration_ms, _expires_at = entry
+
+    total = winner.value
+    history = [winner.wheel_label.replace("\n", " ")]
+    is_payment = winner.payment
+    current_kind = winner.kind
+    wait_ms = total_duration_ms
+
+    for _ in range(MAX_RESPINS):
+        if current_kind != "bonus":
+            break
+
+        await asyncio.sleep(wait_ms / 1000)
+
+        new_winner, video_url, thumb_url, wait_ms, width, height = (
+            await _generate_spin_media(DEFAULT_SEGMENTS)
+        )
+
+        if new_winner.payment:
+            caption = _payment_message(new_winner.value, respin=new_winner.kind == "bonus")
+        else:
+            caption = new_winner.reveal_text or "🎰 ¡Ruleta girada!"
+
+        await context.bot.edit_message_media(
+            inline_message_id=inline_message_id,
+            media=InputMediaVideo(
+                media=video_url,
+                caption=caption,
+                parse_mode=ParseMode.MARKDOWN,
+                width=width,
+                height=height,
+                duration=round(wait_ms / 1000),
+            ),
+        )
+
+        total += new_winner.value
+        history.append(new_winner.wheel_label.replace("\n", " "))
+        is_payment = is_payment or new_winner.payment
+        current_kind = new_winner.kind
+
+    if len(history) > 1 and current_kind != "bonus":
+        await asyncio.sleep(wait_ms / 1000)
+        breakdown = " + ".join(history)
+        label = "Total a pagar" if is_payment else "Total acumulado"
+        suffix = "€" if is_payment else ""
+        await context.bot.edit_message_caption(
+            inline_message_id=inline_message_id,
+            caption=f"🧮 {label} ({breakdown}) = *{total}{suffix}*",
+            parse_mode=ParseMode.MARKDOWN,
+        )
 
 
 async def _start_web_server(application: Application) -> None:
@@ -393,6 +485,7 @@ def main() -> None:
     application.add_handler(CommandHandler("ruletagente", ruleta_gente))
     application.add_handler(CommandHandler("unirme", unirme))
     application.add_handler(InlineQueryHandler(inline_ruleta))
+    application.add_handler(ChosenInlineResultHandler(inline_result_chosen))
     application.add_handler(
         MessageHandler(filters.ChatType.GROUPS & ~filters.COMMAND, track_member)
     )
