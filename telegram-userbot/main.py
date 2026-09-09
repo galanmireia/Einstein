@@ -4,10 +4,12 @@ Runs logged in as the account itself (via TELEGRAM_SESSION), so it sees
 every message that arrives and Telegram's own deletion notifications for
 messages it has already seen — neither of which a normal bot can access.
 
-For each incoming message it remembers the sender and text. When Telegram
-reports that message as deleted, it checks whether the account had
-already read it (comparing against the last known read position for that
-chat) and sends itself ("Saved Messages") a report either way.
+For each incoming message it remembers the sender, text/caption, and (for
+photos, videos, voice notes, audio, etc. under a size limit) the media
+file itself. When Telegram reports that message as deleted, it checks
+whether the account had already read it (comparing against the last known
+read position for that chat) and sends itself ("Saved Messages") a report
+either way — including the original photo/video/audio when it has one.
 
 Private chats and small basic groups don't include a chat id on deletion
 events (Telegram limitation), only the message id, which is unique across
@@ -20,6 +22,7 @@ import asyncio
 import logging
 import os
 from collections import OrderedDict
+from io import BytesIO
 
 from telethon import TelegramClient, events
 from telethon.sessions import StringSession
@@ -35,6 +38,8 @@ API_HASH = os.environ["TELEGRAM_API_HASH"]
 SESSION = os.environ["TELEGRAM_SESSION"]
 
 MAX_CACHE_ENTRIES = 5000
+MAX_MEDIA_CACHE_ENTRIES = 150
+MAX_MEDIA_BYTES = 15 * 1024 * 1024  # skip caching anything bigger than this
 
 client = TelegramClient(StringSession(SESSION), API_ID, API_HASH)
 
@@ -44,14 +49,17 @@ private_cache: "OrderedDict[int, dict]" = OrderedDict()
 # Channels / supergroups: keyed by (chat_id, message_id), their own
 # independent id space, and deletion events do include the chat id.
 channel_cache: "OrderedDict[tuple[int, int], dict]" = OrderedDict()
+# Same keys as above, holding raw media bytes + how to resend them.
+# Kept separate (and much smaller) since these entries are large.
+media_cache: "OrderedDict[object, dict]" = OrderedDict()
 
 # chat_id -> highest inbox message id known to be read.
 read_state: dict[int, int] = {}
 
 
-def _cache_put(cache: "OrderedDict", key, value) -> None:
+def _cache_put(cache: "OrderedDict", key, value, max_entries: int) -> None:
     cache[key] = value
-    if len(cache) > MAX_CACHE_ENTRIES:
+    if len(cache) > max_entries:
         cache.popitem(last=False)
 
 
@@ -70,18 +78,53 @@ async def _sender_display_name(event) -> str:
     return name or "Alguien"
 
 
+async def _download_media(event, key) -> None:
+    file_info = event.file
+    if file_info is None or (file_info.size and file_info.size > MAX_MEDIA_BYTES):
+        return
+
+    try:
+        data = await event.download_media(file=bytes)
+    except Exception:
+        logger.exception("No se pudo descargar el archivo del mensaje")
+        return
+
+    if not data:
+        return
+
+    send_kwargs = {}
+    if event.voice:
+        send_kwargs["voice_note"] = True
+    elif event.video_note:
+        send_kwargs["video_note"] = True
+
+    _cache_put(
+        media_cache,
+        key,
+        {
+            "data": data,
+            "filename": getattr(file_info, "name", None),
+            "send_kwargs": send_kwargs,
+        },
+        MAX_MEDIA_CACHE_ENTRIES,
+    )
+
+
 @client.on(events.NewMessage(incoming=True))
 async def on_new_message(event) -> None:
     entry = {
-        "text": event.raw_text or "(mensaje sin texto: foto/vídeo/audio/etc.)",
+        "text": event.raw_text or ("(sin texto)" if event.media else ""),
         "sender_name": await _sender_display_name(event),
         "chat_title": getattr(event.chat, "title", None) if event.chat else None,
+        "has_media": bool(event.media),
     }
 
-    if event.is_channel:
-        _cache_put(channel_cache, (event.chat_id, event.id), entry)
-    else:
-        _cache_put(private_cache, event.id, entry)
+    key = (event.chat_id, event.id) if event.is_channel else event.id
+    cache = channel_cache if event.is_channel else private_cache
+    _cache_put(cache, key, entry, MAX_CACHE_ENTRIES)
+
+    if event.media:
+        await _download_media(event, key)
 
 
 @client.on(events.MessageRead)
@@ -90,7 +133,7 @@ async def on_read(event) -> None:
         read_state[event.chat_id] = max(read_state.get(event.chat_id, 0), event.max_id)
 
 
-async def _report_deletion(entry: dict, msg_id: int, chat_id: int | None) -> None:
+async def _report_deletion(entry: dict, media: dict | None, msg_id: int, chat_id: int | None) -> None:
     was_read = msg_id <= read_state.get(chat_id, 0) if chat_id is not None else False
     status = "✅ Ya lo habías leído" if was_read else "🔴 NO lo habías leído"
 
@@ -101,25 +144,44 @@ async def _report_deletion(entry: dict, msg_id: int, chat_id: int | None) -> Non
     ]
     if entry.get("chat_title"):
         lines.append(f"💬 En: {entry['chat_title']}")
-    lines.append(f"📝 \"{entry['text']}\"")
+    if entry["text"]:
+        lines.append(f"📝 \"{entry['text']}\"")
+    if entry.get("has_media") and media is None:
+        lines.append("⚠️ Llevaba un archivo adjunto que no se pudo guardar (demasiado grande).")
 
-    await client.send_message("me", "\n".join(lines), parse_mode="markdown")
+    caption = "\n".join(lines)
+
+    if media is not None:
+        file_obj = BytesIO(media["data"])
+        file_obj.name = media.get("filename") or "archivo"
+        await client.send_file(
+            "me",
+            file_obj,
+            caption=caption,
+            parse_mode="markdown",
+            **media["send_kwargs"],
+        )
+    else:
+        await client.send_message("me", caption, parse_mode="markdown")
 
 
 @client.on(events.MessageDeleted)
 async def on_deleted(event) -> None:
     for msg_id in event.deleted_ids:
         if event.chat_id is not None:
-            entry = channel_cache.pop((event.chat_id, msg_id), None)
+            key = (event.chat_id, msg_id)
+            entry = channel_cache.pop(key, None)
             chat_id = event.chat_id
         else:
-            entry = private_cache.pop(msg_id, None)
+            key = msg_id
+            entry = private_cache.pop(key, None)
             chat_id = None
 
         if entry is None:
             continue
 
-        await _report_deletion(entry, msg_id, chat_id)
+        media = media_cache.pop(key, None)
+        await _report_deletion(entry, media, msg_id, chat_id)
 
 
 async def _init_read_state() -> None:
