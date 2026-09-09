@@ -85,19 +85,28 @@ async def setlog(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     )
 
 
+GROUP_ANONYMOUS_BOT_ID = 1087968824
+
+
 async def whois(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     if not update.effective_chat or update.effective_chat.type not in GROUP_CHAT_TYPES:
         await update.message.reply_text("Este comando es para usarlo dentro de un grupo.")
         return
 
-    member = await context.bot.get_chat_member(
-        update.effective_chat.id, update.effective_user.id
-    )
-    if member.status not in ("administrator", "creator"):
-        await update.message.reply_text(
-            "⚠️ Solo los administradores del grupo pueden usar /whois."
+    # Messages sent as "anonymous admin" arrive from Telegram's special
+    # GroupAnonymousBot account instead of the real user, so get_chat_member
+    # on that id would fail even though only real admins can send that way.
+    is_anonymous_admin = update.effective_user.id == GROUP_ANONYMOUS_BOT_ID
+
+    if not is_anonymous_admin:
+        member = await context.bot.get_chat_member(
+            update.effective_chat.id, update.effective_user.id
         )
-        return
+        if member.status not in ("administrator", "creator"):
+            await update.message.reply_text(
+                "⚠️ Solo los administradores del grupo pueden usar /whois."
+            )
+            return
 
     if not context.args:
         await update.message.reply_text("Uso: /whois @usuario")
