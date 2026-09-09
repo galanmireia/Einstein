@@ -4,14 +4,18 @@ import logging
 import os
 import random
 import re
+import time
+import uuid
 from dataclasses import dataclass
 
-from telegram import InputFile, Update
+from aiohttp import web
+from telegram import InlineQueryResultVideo, InputFile, Update
 from telegram.constants import ChatType, ParseMode
 from telegram.ext import (
     Application,
     CommandHandler,
     ContextTypes,
+    InlineQueryHandler,
     MessageHandler,
     filters,
 )
@@ -36,6 +40,13 @@ GROUP_CHAT_TYPES = (ChatType.GROUP, ChatType.SUPERGROUP)
 # only ever contains people the bot has actually seen post, plus anyone who
 # has run /unirme. It resets if the bot restarts or redeploys.
 chat_members: dict[int, dict[int, str]] = {}
+
+# Inline mode needs a public URL for the video/thumbnail (Telegram fetches
+# them itself), so generated media is cached here briefly and served by a
+# small web server running alongside the bot. media_id -> (bytes, content_type, expires_at)
+media_cache: dict[str, tuple[bytes, str, float]] = {}
+MEDIA_TTL_SECONDS = 300
+PUBLIC_BASE_URL = os.environ.get("PUBLIC_BASE_URL", "").rstrip("/")
 
 
 @dataclass
@@ -282,6 +293,86 @@ async def ruleta(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         )
 
 
+def _cache_media(data: bytes, content_type: str) -> str:
+    media_id = uuid.uuid4().hex
+    media_cache[media_id] = (data, content_type, time.time() + MEDIA_TTL_SECONDS)
+    return media_id
+
+
+def _cleanup_media_cache() -> None:
+    now = time.time()
+    expired = [key for key, (_, _, expires_at) in media_cache.items() if expires_at < now]
+    for key in expired:
+        media_cache.pop(key, None)
+
+
+async def handle_media_request(request: web.Request) -> web.Response:
+    entry = media_cache.get(request.match_info["media_id"])
+    if not entry:
+        return web.Response(status=404)
+    data, content_type, _ = entry
+    return web.Response(body=data, content_type=content_type)
+
+
+async def inline_ruleta(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    if not PUBLIC_BASE_URL:
+        await update.inline_query.answer([], cache_time=0)
+        return
+
+    _cleanup_media_cache()
+
+    segments = DEFAULT_SEGMENTS
+    winning_index = random.randrange(len(segments))
+    winner = segments[winning_index]
+    wheel_labels = [segment.wheel_label for segment in segments]
+
+    loop = asyncio.get_running_loop()
+    video_bytes, total_duration_ms, width, height, thumbnail_bytes = (
+        await loop.run_in_executor(None, build_spin_video, wheel_labels, winning_index)
+    )
+
+    video_id = _cache_media(video_bytes, "video/mp4")
+    thumb_id = _cache_media(thumbnail_bytes, "image/png")
+
+    if winner.payment:
+        caption = _payment_message(winner.value, respin=winner.kind == "bonus")
+    else:
+        caption = winner.reveal_text or "🎰 ¡Ruleta girada!"
+
+    result = InlineQueryResultVideo(
+        id=uuid.uuid4().hex,
+        video_url=f"{PUBLIC_BASE_URL}/media/{video_id}.mp4",
+        mime_type="video/mp4",
+        thumbnail_url=f"{PUBLIC_BASE_URL}/media/{thumb_id}.png",
+        title="🎰 Girar la ruleta",
+        caption=caption,
+        parse_mode=ParseMode.MARKDOWN,
+        video_duration=round(total_duration_ms / 1000),
+        video_width=width,
+        video_height=height,
+    )
+
+    await update.inline_query.answer([result], cache_time=0, is_personal=True)
+
+
+async def _start_web_server(application: Application) -> None:
+    port = int(os.environ.get("PORT", "8080"))
+    web_app = web.Application()
+    web_app.router.add_get("/media/{media_id}.{ext}", handle_media_request)
+    runner = web.AppRunner(web_app)
+    await runner.setup()
+    site = web.TCPSite(runner, "0.0.0.0", port)
+    await site.start()
+    application.bot_data["web_runner"] = runner
+    logger.info("Servidor de medios escuchando en el puerto %s", port)
+
+
+async def _stop_web_server(application: Application) -> None:
+    runner = application.bot_data.get("web_runner")
+    if runner:
+        await runner.cleanup()
+
+
 def main() -> None:
     token = os.environ.get("TELEGRAM_BOT_TOKEN")
     if not token:
@@ -289,12 +380,19 @@ def main() -> None:
             "Falta la variable de entorno TELEGRAM_BOT_TOKEN con el token del bot."
         )
 
-    application = Application.builder().token(token).build()
+    application = (
+        Application.builder()
+        .token(token)
+        .post_init(_start_web_server)
+        .post_shutdown(_stop_web_server)
+        .build()
+    )
 
     application.add_handler(CommandHandler("start", start))
     application.add_handler(CommandHandler("ruleta", ruleta))
     application.add_handler(CommandHandler("ruletagente", ruleta_gente))
     application.add_handler(CommandHandler("unirme", unirme))
+    application.add_handler(InlineQueryHandler(inline_ruleta))
     application.add_handler(
         MessageHandler(filters.ChatType.GROUPS & ~filters.COMMAND, track_member)
     )
