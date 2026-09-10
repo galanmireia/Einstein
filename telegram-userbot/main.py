@@ -35,9 +35,6 @@ channel_cache: "OrderedDict[tuple[int, int], dict]" = OrderedDict()
 # Multimedia utilizada por el sistema de mensajes borrados
 media_cache: "OrderedDict[object, dict]" = OrderedDict()
 
-# Claves de media ya reenviada al marcarse como leída, para no duplicarla
-sent_on_read_keys: set = set()
-
 # chat_id -> último mensaje leído
 read_state: dict[int, int] = {}
 
@@ -127,30 +124,16 @@ async def _download_media(event, key) -> None:
         MAX_MEDIA_CACHE_ENTRIES,
     )
 
-    logger.info(
-        "Media cacheada: key=%s event.id=%s chat_id=%s read_hasta=%s",
-        key,
-        event.id,
-        event.chat_id,
-        read_state.get(event.chat_id, 0),
-    )
-
-    # Si para cuando termina de descargarse el mensaje ya se había
-    # marcado como leído (chat abierto en el momento de recibirlo), el
-    # evento MessageRead ya pasó de largo sin encontrar nada en la
-    # caché: lo comprobamos aquí para no perder ese envío.
-    if event.id <= read_state.get(event.chat_id, 0):
-        await _send_media_to_alerts(key, media)
+    await _forward_media_to_alerts(key, media)
 
 
-async def _send_media_to_alerts(key, media) -> None:
+async def _forward_media_to_alerts(key, media) -> None:
     """
     Reenvía la media (foto, vídeo, nota de voz, etc.) a Mensajes guardados
-    en cuanto se lee, usando la copia ya descargada por _download_media.
+    en cuanto llega. Telegram no entrega de forma fiable a esta sesión el
+    aviso de "ya lo has leído" para chats privados, así que en vez de
+    esperar a eso, se reenvía directamente al recibirla.
     """
-
-    if key in sent_on_read_keys:
-        return
 
     try:
         file_obj = BytesIO(media["data"])
@@ -160,13 +143,6 @@ async def _send_media_to_alerts(key, media) -> None:
             "me",
             file_obj,
             **media["send_kwargs"],
-        )
-
-        sent_on_read_keys.add(key)
-
-        logger.info(
-            "Media enviada automáticamente a Mensajes guardados: %s",
-            key,
         )
 
     except Exception:
@@ -234,53 +210,13 @@ async def on_new_message(event) -> None:
 
 @client.on(events.MessageRead)
 async def on_read(event) -> None:
-
-    logger.info(
-        "MessageRead: chat_id=%s inbox=%s max_id=%s is_channel=%s",
-        event.chat_id,
-        event.inbox,
-        event.max_id,
-        event.is_channel,
-    )
-
     if not event.inbox:
         return
 
-    chat_id = event.chat_id
-    previous_max_id = read_state.get(chat_id, 0)
-    new_max_id = event.max_id
-
-    read_state[chat_id] = max(
-        previous_max_id,
-        new_max_id,
+    read_state[event.chat_id] = max(
+        read_state.get(event.chat_id, 0),
+        event.max_id,
     )
-
-    # Solo procesamos mensajes nuevos que han pasado
-    # de no leídos a leídos.
-    if new_max_id <= previous_max_id:
-        return
-
-    # Telegram puede marcar varios mensajes como leídos
-    # simultáneamente, por lo que comprobamos el rango.
-    for msg_id in range(
-        previous_max_id + 1,
-        new_max_id + 1,
-    ):
-
-        if event.is_channel:
-            key = (chat_id, msg_id)
-        else:
-            key = msg_id
-
-        media = media_cache.get(key)
-
-        if media is None:
-            continue
-
-        await _send_media_to_alerts(
-            key,
-            media,
-        )
 
 
 async def _report_deletion(
