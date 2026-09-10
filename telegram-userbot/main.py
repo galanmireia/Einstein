@@ -305,12 +305,36 @@ async def on_historial_command(event) -> None:
 
 TRANSLATE_COMMAND_RE = re.compile(r"^\.t\s+(.+)$", re.IGNORECASE | re.DOTALL)
 
-# Código corto -> idioma destino. "" (sin código) es el idioma por
-# defecto. Se irán añadiendo más según haga falta.
+# Código corto -> idioma destino (clave en TRANSLATE_LANGUAGES). "" (sin
+# código) usa DEFAULT_TRANSLATE_LANG. Se irán añadiendo más según haga
+# falta.
 TRANSLATE_LANG_CODES = {
     "v": "eu",  # vasco / euskara
 }
 DEFAULT_TRANSLATE_LANG = "en"
+
+# Cada idioma necesita su código para Google (deep_translator normaliza
+# estos) y, como reserva si Google falla (les cambia el HTML a veces),
+# el código con locale que exige MyMemory.
+TRANSLATE_LANGUAGES = {
+    "en": {"google": "en", "mymemory": "en-GB"},
+    "eu": {"google": "eu", "mymemory": "eu-ES"},
+}
+SOURCE_LANG_GOOGLE = "es"
+SOURCE_LANG_MYMEMORY = "es-ES"
+
+
+def _translate_sync(text: str, lang_key: str) -> str:
+    codes = TRANSLATE_LANGUAGES[lang_key]
+
+    try:
+        return GoogleTranslator(source=SOURCE_LANG_GOOGLE, target=codes["google"]).translate(text)
+    except Exception:
+        logger.exception("Google Translate falló, probando con MyMemory")
+
+    from deep_translator import MyMemoryTranslator
+
+    return MyMemoryTranslator(source=SOURCE_LANG_MYMEMORY, target=codes["mymemory"]).translate(text)
 
 
 @client.on(events.NewMessage(outgoing=True, pattern=TRANSLATE_COMMAND_RE))
@@ -319,20 +343,17 @@ async def on_translate_command(event) -> None:
     parts = raw.split(maxsplit=1)
 
     if len(parts) == 2 and parts[0].lower() in TRANSLATE_LANG_CODES:
-        target_lang = TRANSLATE_LANG_CODES[parts[0].lower()]
+        lang_key = TRANSLATE_LANG_CODES[parts[0].lower()]
         text = parts[1]
     else:
-        target_lang = DEFAULT_TRANSLATE_LANG
+        lang_key = DEFAULT_TRANSLATE_LANG
         text = raw
 
     await event.delete()
 
     try:
         loop = asyncio.get_running_loop()
-        translated = await loop.run_in_executor(
-            None,
-            lambda: GoogleTranslator(source="es", target=target_lang).translate(text),
-        )
+        translated = await loop.run_in_executor(None, _translate_sync, text, lang_key)
     except Exception:
         logger.exception("Error al traducir")
         await client.send_message("me", f"⚠️ No se pudo traducir: {text[:200]}")
