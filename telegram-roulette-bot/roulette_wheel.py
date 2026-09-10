@@ -117,6 +117,7 @@ def build_spin_video(
     frame_count: int = 28,
     fps: int = 20,
     hold_seconds: float = 1.5,
+    intro_hold_seconds: float = 1.0,
 ) -> tuple[bytes, int, int, int, bytes]:
     import os
     import subprocess
@@ -137,7 +138,16 @@ def build_spin_video(
     total_rotation = full_spins + target_rotation
 
     ms_per_video_frame = 1000 / fps
-    video_frames = []
+
+    # Telegram generates the static poster it shows outside of playback
+    # (and after re-shares/forwards) from the video's own first frame(s),
+    # ignoring the thumbnail we hand it — it does NOT match the winner
+    # unless the video already opens on that rotation. So the clip opens
+    # held on the winning position before "resetting" to spin for real,
+    # instead of starting unspun.
+    landed_frame = _compose_frame(base_wheel, total_rotation)
+    intro_repeat = max(1, round((intro_hold_seconds * 1000) / ms_per_video_frame))
+    video_frames = [landed_frame] * intro_repeat
     for frame_idx in range(frame_count + 1):
         t = frame_idx / frame_count
         eased_t = _ease_out_cubic(t)
