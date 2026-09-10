@@ -406,7 +406,7 @@ async def _generate_spin_media(segments: list[Segment]) -> tuple[Segment, str, s
 
 def _cleanup_pending_results() -> None:
     now = time.time()
-    expired = [key for key, (_, _, expires_at) in pending_inline_results.items() if expires_at < now]
+    expired = [key for key, (_, _, _, expires_at) in pending_inline_results.items() if expires_at < now]
     for key in expired:
         pending_inline_results.pop(key, None)
 
