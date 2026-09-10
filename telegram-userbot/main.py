@@ -431,6 +431,85 @@ async def on_voz_command(event) -> None:
     await client.send_message("me", f"🎙 Transcripción:\n{text}")
 
 
+FORMATO_COMMAND_RE = re.compile(r"^\.formato\s+(\w+)(?:\s+(\d+))?\s*\n(.+)$", re.IGNORECASE | re.DOTALL)
+
+
+def _format_as_table(text: str, columns: int) -> str:
+    cells = [c.strip() for c in re.split(r"\n\s*\n", text.strip()) if c.strip()]
+
+    if len(cells) >= columns * 2 and (len(cells) - columns) % columns == 0:
+        rows = [cells[i : i + columns] for i in range(0, len(cells), columns)]
+    elif len(cells) >= columns + 1 and (len(cells) - columns) % (columns + 1) == 0:
+        # La celda vacía de la esquina superior izquierda de estas tablas
+        # (cabecera + columna de etiquetas) desaparece al copiar/pegar
+        # como texto plano, así que la cabecera tiene una celda menos que
+        # el resto de filas. Se detecta y se rellena.
+        header = [""] + cells[:columns]
+        body = cells[columns:]
+        rows = [header] + [
+            body[i : i + columns + 1] for i in range(0, len(body), columns + 1)
+        ]
+    else:
+        raise ValueError(
+            f"No consigo encuadrar el texto en {columns} columnas "
+            f"({len(cells)} celdas encontradas). Prueba con otro número: "
+            f".formato tabla <n>"
+        )
+
+    width_count = max(len(row) for row in rows)
+    rows = [row + [""] * (width_count - len(row)) for row in rows]
+    widths = [max(len(row[c]) for row in rows) for c in range(width_count)]
+
+    def fmt_row(row: list[str]) -> str:
+        return "| " + " | ".join(cell.ljust(widths[c]) for c, cell in enumerate(row)) + " |"
+
+    sep = "+-" + "-+-".join("-" * w for w in widths) + "-+"
+
+    lines = [sep, fmt_row(rows[0]), sep]
+    for row in rows[1:]:
+        lines.append(fmt_row(row))
+    lines.append(sep)
+    return "\n".join(lines)
+
+
+# Modo -> función de formato. Cada una recibe (texto, columnas) y
+# devuelve el texto ya formateado. Se pueden ir añadiendo más modos.
+FORMATO_MODES = {
+    "tabla": _format_as_table,
+}
+
+
+@client.on(events.NewMessage(outgoing=True, pattern=FORMATO_COMMAND_RE))
+async def on_formato_command(event) -> None:
+    mode = event.pattern_match.group(1).lower()
+    columns_arg = event.pattern_match.group(2)
+    text = event.pattern_match.group(3)
+
+    await event.delete()
+
+    formatter = FORMATO_MODES.get(mode)
+    if formatter is None:
+        await client.send_message(
+            "me",
+            f"⚠️ No conozco el modo \"{mode}\". Modos disponibles: {', '.join(FORMATO_MODES)}",
+        )
+        return
+
+    columns = int(columns_arg) if columns_arg else 2
+
+    try:
+        formatted = formatter(text, columns)
+    except ValueError as exc:
+        await client.send_message("me", f"⚠️ {exc}")
+        return
+    except Exception:
+        logger.exception("Error al formatear texto")
+        await client.send_message("me", "⚠️ No se pudo dar formato a ese texto.")
+        return
+
+    await client.send_message(event.chat_id, f"```\n{formatted}\n```", parse_mode="markdown")
+
+
 @client.on(events.NewMessage(incoming=True))
 async def on_new_message(event) -> None:
 
