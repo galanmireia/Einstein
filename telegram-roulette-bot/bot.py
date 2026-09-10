@@ -97,19 +97,19 @@ class Segment:
 
 
 FUNNY_PAYMENT_LINES = [
-    "😂 ¡Qué suertudo/a eres! Te toca pagar *{v}€*",
-    "💸 Mala suerte... ¡pagas *{v}€*!",
-    "🤑 Se te ve forrado/a, paga *{v}€*",
-    "😅 Vaya papelón... pagas *{v}€*",
-    "🙃 La ruleta no perdona: *{v}€* pa'l bote",
-    "🥲 Hoy invitas tú: *{v}€*",
+    "🎉 ¡Enhorabuena! Te has ganado el privilegio de enviar *{v}€* 👏",
+    "👑 Qué honor el tuyo, te toca demostrar tu valía con *{v}€*",
+    "🏆 ¡Lo conseguiste! Tu premio es la oportunidad de pagar *{v}€*",
+    "🙌 Bien hecho, ahora demuestra que te lo mereces mandando *{v}€*",
+    "😏 Mira qué suerte la tuya... te toca ganarte tu sitio con *{v}€*",
+    "✨ Justo lo que necesitabas: la ocasión perfecta de enviar *{v}€*",
 ]
 
 
 def _payment_message(value: int, respin: bool) -> str:
     text = random.choice(FUNNY_PAYMENT_LINES).format(v=value)
     if respin:
-        text += " 🔁 Y encima vuelves a tirar..."
+        text += " 🔁 Y de premio, ¡vuelves a girar!"
     return text
 
 
