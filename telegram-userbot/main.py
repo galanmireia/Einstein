@@ -252,21 +252,18 @@ async def on_historial_command(event) -> None:
     note_text = event.pattern_match.group(1)
     await event.delete()
 
-    if event.is_reply:
-        reply_msg = await event.get_reply_message()
-        if reply_msg is None or reply_msg.sender_id is None:
-            await client.send_message("me", "⚠️ No he podido identificar a esa persona.")
-            return
-        user_id = reply_msg.sender_id
-    elif event.is_private:
-        # En un chat privado no hace falta responder: solo hay otra
-        # persona posible, el propio chat.
-        user_id = event.chat_id
-    else:
+    if not event.is_reply:
         await client.send_message(
             "me", "⚠️ Usa .historial respondiendo al mensaje de esa persona."
         )
         return
+
+    reply_msg = await event.get_reply_message()
+    if reply_msg is None or reply_msg.sender_id is None:
+        await client.send_message("me", "⚠️ No he podido identificar a esa persona.")
+        return
+
+    user_id = reply_msg.sender_id
 
     if note_text:
         identity_notes[user_id] = note_text.strip()
