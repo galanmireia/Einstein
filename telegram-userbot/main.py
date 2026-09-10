@@ -156,10 +156,18 @@ async def _forward_media_to_alerts(key, media) -> None:
 ROULETTE_COMMAND_RE = re.compile(r"^\.ruleta(?:\s+(\w+))?\s*$", re.IGNORECASE)
 UNIR_COMMAND_RE = re.compile(r"^\.unir\s*$", re.IGNORECASE)
 
-# Chats donde, además del reporte de borrados (siempre activo en todos
-# lados), también se reenvía cada foto/vídeo a Mensajes guardados en
-# cuanto llega. Se activa/desactiva por chat con .unir.
-media_forwarding_chats: set = set()
+# Por defecto, además del reporte de borrados (siempre activo en todos
+# lados), los chats privados también reenvían cada foto/vídeo a Mensajes
+# guardados en cuanto llega; los grupos/canales no. .unir invierte ese
+# valor por defecto para el chat donde se escriba, quedando guardado
+# aquí como excepción explícita.
+media_forwarding_overrides: dict[int, bool] = {}
+
+
+def _media_forwarding_enabled(event) -> bool:
+    if event.chat_id in media_forwarding_overrides:
+        return media_forwarding_overrides[event.chat_id]
+    return bool(event.is_private)
 
 
 @client.on(events.NewMessage(outgoing=True, pattern=ROULETTE_COMMAND_RE))
@@ -179,17 +187,18 @@ async def on_ruleta_command(event) -> None:
 @client.on(events.NewMessage(outgoing=True, pattern=UNIR_COMMAND_RE))
 async def on_unir_command(event) -> None:
     chat_id = event.chat_id
+    currently_enabled = _media_forwarding_enabled(event)
     await event.delete()
 
-    if chat_id in media_forwarding_chats:
-        media_forwarding_chats.discard(chat_id)
-        await client.send_message(
-            chat_id, "🔕 Guardado automático de fotos/vídeos desactivado en este chat."
-        )
-    else:
-        media_forwarding_chats.add(chat_id)
+    media_forwarding_overrides[chat_id] = not currently_enabled
+
+    if not currently_enabled:
         await client.send_message(
             chat_id, "🔔 Guardado automático de fotos/vídeos activado en este chat."
+        )
+    else:
+        await client.send_message(
+            chat_id, "🔕 Guardado automático de fotos/vídeos desactivado en este chat."
         )
 
 
@@ -230,7 +239,7 @@ async def on_new_message(event) -> None:
 
     if event.media:
         media = await _download_media(event, key)
-        if media is not None and event.chat_id in media_forwarding_chats:
+        if media is not None and _media_forwarding_enabled(event):
             await _forward_media_to_alerts(key, media)
 
 
