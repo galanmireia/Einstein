@@ -70,13 +70,13 @@ async def _sender_display_name(event) -> str:
     return name or "Alguien"
 
 
-async def _download_media(event, key) -> None:
+async def _download_media(event, key) -> dict | None:
     file_info = event.file
 
     if file_info is None or (
         file_info.size and file_info.size > MAX_MEDIA_BYTES
     ):
-        return
+        return None
 
     try:
         data = await event.download_media(file=bytes)
@@ -84,10 +84,10 @@ async def _download_media(event, key) -> None:
         logger.exception(
             "No se pudo descargar el archivo del mensaje"
         )
-        return
+        return None
 
     if not data:
-        return
+        return None
 
     send_kwargs = {}
 
@@ -124,15 +124,16 @@ async def _download_media(event, key) -> None:
         MAX_MEDIA_CACHE_ENTRIES,
     )
 
-    await _forward_media_to_alerts(key, media)
+    return media
 
 
 async def _forward_media_to_alerts(key, media) -> None:
     """
     Reenvía la media (foto, vídeo, nota de voz, etc.) a Mensajes guardados
-    en cuanto llega. Telegram no entrega de forma fiable a esta sesión el
-    aviso de "ya lo has leído" para chats privados, así que en vez de
-    esperar a eso, se reenvía directamente al recibirla.
+    en cuanto llega, solo para los chats activados con .unir. Telegram no
+    entrega de forma fiable a esta sesión el aviso de "ya lo has leído"
+    para chats privados, así que en vez de esperar a eso, se reenvía
+    directamente al recibirla.
     """
 
     try:
@@ -153,6 +154,12 @@ async def _forward_media_to_alerts(key, media) -> None:
 
 
 ROULETTE_COMMAND_RE = re.compile(r"^\.ruleta(?:\s+(\w+))?\s*$", re.IGNORECASE)
+UNIR_COMMAND_RE = re.compile(r"^\.unir\s*$", re.IGNORECASE)
+
+# Chats donde, además del reporte de borrados (siempre activo en todos
+# lados), también se reenvía cada foto/vídeo a Mensajes guardados en
+# cuanto llega. Se activa/desactiva por chat con .unir.
+media_forwarding_chats: set = set()
 
 
 @client.on(events.NewMessage(outgoing=True, pattern=ROULETTE_COMMAND_RE))
@@ -167,6 +174,23 @@ async def on_ruleta_command(event) -> None:
     except Exception:
         logger.exception("Error al girar la ruleta")
         await client.send_message(event.chat_id, "⚠️ Algo falló girando la ruleta.")
+
+
+@client.on(events.NewMessage(outgoing=True, pattern=UNIR_COMMAND_RE))
+async def on_unir_command(event) -> None:
+    chat_id = event.chat_id
+    await event.delete()
+
+    if chat_id in media_forwarding_chats:
+        media_forwarding_chats.discard(chat_id)
+        await client.send_message(
+            chat_id, "🔕 Guardado automático de fotos/vídeos desactivado en este chat."
+        )
+    else:
+        media_forwarding_chats.add(chat_id)
+        await client.send_message(
+            chat_id, "🔔 Guardado automático de fotos/vídeos activado en este chat."
+        )
 
 
 @client.on(events.NewMessage(incoming=True))
@@ -205,7 +229,9 @@ async def on_new_message(event) -> None:
     )
 
     if event.media:
-        await _download_media(event, key)
+        media = await _download_media(event, key)
+        if media is not None and event.chat_id in media_forwarding_chats:
+            await _forward_media_to_alerts(key, media)
 
 
 @client.on(events.MessageRead)
