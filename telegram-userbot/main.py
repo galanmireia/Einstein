@@ -431,7 +431,9 @@ async def on_voz_command(event) -> None:
     await client.send_message("me", f"🎙 Transcripción:\n{text}")
 
 
-FORMATO_COMMAND_RE = re.compile(r"^\.formato\s+(\w+)(?:\s+(\d+))?\s*\n(.+)$", re.IGNORECASE | re.DOTALL)
+FORMATO_COMMAND_RE = re.compile(
+    r"^\.formato\s+(\w+)(?:\s+(\d+))?(?:\s*\n(.+))?$", re.IGNORECASE | re.DOTALL
+)
 
 
 def _format_as_table(text: str, columns: int) -> str:
@@ -486,6 +488,22 @@ async def on_formato_command(event) -> None:
     text = event.pattern_match.group(3)
 
     await event.delete()
+
+    if not text:
+        if not event.is_reply:
+            await client.send_message(
+                "me",
+                "⚠️ Pega el texto tras el comando (con Mayús+Intro, en el mismo "
+                "mensaje) o responde con .formato al mensaje que lo contiene.",
+            )
+            return
+        reply_msg = await event.get_reply_message()
+        if reply_msg is None or not reply_msg.raw_text:
+            await client.send_message(
+                "me", "⚠️ No he encontrado texto en el mensaje al que respondes."
+            )
+            return
+        text = reply_msg.raw_text
 
     formatter = FORMATO_MODES.get(mode)
     if formatter is None:
