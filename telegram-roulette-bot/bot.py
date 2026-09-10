@@ -74,26 +74,32 @@ def _is_allowed(user) -> bool:
     return False
 
 
-# Optional: short name of a Telegram sticker set (the part after
-# t.me/addstickers/) to send one random sticker from alongside each
-# result. Empty (the default) means no sticker is sent.
-STICKER_PACK_NAME = os.environ.get("STICKER_PACK_NAME", "").strip()
+# Optional: comma-separated short names of Telegram sticker sets (the
+# part after t.me/addstickers/) to send one random sticker from
+# alongside each result. Empty (the default) means no sticker is sent.
+STICKER_PACK_NAMES = [
+    name.strip()
+    for name in os.environ.get("STICKER_PACK_NAME", "").split(",")
+    if name.strip()
+]
 _sticker_file_ids: list[str] | None = None
 
 
 async def _get_random_sticker_id(bot) -> str | None:
     global _sticker_file_ids
 
-    if not STICKER_PACK_NAME:
+    if not STICKER_PACK_NAMES:
         return None
 
     if _sticker_file_ids is None:
-        try:
-            sticker_set = await bot.get_sticker_set(STICKER_PACK_NAME)
-            _sticker_file_ids = [sticker.file_id for sticker in sticker_set.stickers]
-        except Exception:
-            logger.exception("No se pudo cargar el pack de stickers %s", STICKER_PACK_NAME)
-            _sticker_file_ids = []
+        file_ids = []
+        for pack_name in STICKER_PACK_NAMES:
+            try:
+                sticker_set = await bot.get_sticker_set(pack_name)
+                file_ids.extend(sticker.file_id for sticker in sticker_set.stickers)
+            except Exception:
+                logger.exception("No se pudo cargar el pack de stickers %s", pack_name)
+        _sticker_file_ids = file_ids
 
     if not _sticker_file_ids:
         return None

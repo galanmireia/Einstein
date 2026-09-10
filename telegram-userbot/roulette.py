@@ -21,30 +21,37 @@ MIN_OPTIONS = 2
 MAX_OPTIONS = 10
 MAX_RESPINS = 5
 
-# Optional: short name of a Telegram sticker set (the part after
-# t.me/addstickers/) to send one random sticker from alongside each
-# result. Empty (the default) means no sticker is sent.
-STICKER_PACK_NAME = os.environ.get("STICKER_PACK_NAME", "").strip()
+# Optional: comma-separated short names of Telegram sticker sets (the
+# part after t.me/addstickers/) to send one random sticker from
+# alongside each result. Empty (the default) means no sticker is sent.
+STICKER_PACK_NAMES = [
+    name.strip()
+    for name in os.environ.get("STICKER_PACK_NAME", "").split(",")
+    if name.strip()
+]
 _sticker_documents: list | None = None
 
 
 async def _get_random_sticker(client):
     global _sticker_documents
 
-    if not STICKER_PACK_NAME:
+    if not STICKER_PACK_NAMES:
         return None
 
     if _sticker_documents is None:
-        try:
-            result = await client(
-                GetStickerSetRequest(
-                    stickerset=InputStickerSetShortName(short_name=STICKER_PACK_NAME),
-                    hash=0,
+        documents = []
+        for pack_name in STICKER_PACK_NAMES:
+            try:
+                result = await client(
+                    GetStickerSetRequest(
+                        stickerset=InputStickerSetShortName(short_name=pack_name),
+                        hash=0,
+                    )
                 )
-            )
-            _sticker_documents = result.documents
-        except Exception:
-            _sticker_documents = []
+                documents.extend(result.documents)
+            except Exception:
+                pass
+        _sticker_documents = documents
 
     if not _sticker_documents:
         return None
