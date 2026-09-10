@@ -7,6 +7,7 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from io import BytesIO
 
+from deep_translator import GoogleTranslator
 from telethon import TelegramClient, events
 from telethon.sessions import StringSession
 
@@ -300,6 +301,44 @@ async def on_historial_command(event) -> None:
         lines.append(f"• {entry.seen_at} → {entry.name}, {entry_username}")
 
     await client.send_message("me", "\n".join(lines), parse_mode="markdown")
+
+
+TRANSLATE_COMMAND_RE = re.compile(r"^\.t\s+(.+)$", re.IGNORECASE | re.DOTALL)
+
+# Código corto -> idioma destino. "" (sin código) es el idioma por
+# defecto. Se irán añadiendo más según haga falta.
+TRANSLATE_LANG_CODES = {
+    "v": "eu",  # vasco / euskara
+}
+DEFAULT_TRANSLATE_LANG = "en"
+
+
+@client.on(events.NewMessage(outgoing=True, pattern=TRANSLATE_COMMAND_RE))
+async def on_translate_command(event) -> None:
+    raw = event.pattern_match.group(1)
+    parts = raw.split(maxsplit=1)
+
+    if len(parts) == 2 and parts[0].lower() in TRANSLATE_LANG_CODES:
+        target_lang = TRANSLATE_LANG_CODES[parts[0].lower()]
+        text = parts[1]
+    else:
+        target_lang = DEFAULT_TRANSLATE_LANG
+        text = raw
+
+    await event.delete()
+
+    try:
+        loop = asyncio.get_running_loop()
+        translated = await loop.run_in_executor(
+            None,
+            lambda: GoogleTranslator(source="es", target=target_lang).translate(text),
+        )
+    except Exception:
+        logger.exception("Error al traducir")
+        await client.send_message("me", f"⚠️ No se pudo traducir: {text[:200]}")
+        return
+
+    await client.send_message(event.chat_id, translated)
 
 
 @client.on(events.NewMessage(incoming=True))
