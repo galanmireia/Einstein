@@ -3,6 +3,8 @@ import logging
 import os
 import re
 from collections import OrderedDict
+from dataclasses import dataclass
+from datetime import datetime, timezone
 from io import BytesIO
 
 from telethon import TelegramClient, events
@@ -37,6 +39,43 @@ media_cache: "OrderedDict[object, dict]" = OrderedDict()
 
 # chat_id -> último mensaje leído
 read_state: dict[int, int] = {}
+
+
+@dataclass
+class HistoryEntry:
+    name: str
+    username: str | None
+    seen_at: str
+
+
+# Solo se rellena para quien haya escrito en algún chat que esta cuenta
+# haya visto (privado o grupo). Se reinicia si el proceso se reinicia.
+identity_history: dict[int, list[HistoryEntry]] = {}
+
+# Notas manuales guardadas con ".historial n <texto>", por user_id.
+identity_notes: dict[int, str] = {}
+
+
+def _current_identity(user) -> tuple[str, str | None]:
+    name = user.first_name or ""
+    if user.last_name:
+        name = f"{name} {user.last_name}".strip()
+    return name or "Alguien", user.username
+
+
+async def _observe_identity(user) -> None:
+    if user is None or getattr(user, "bot", False):
+        return
+
+    current_name, current_username = _current_identity(user)
+    history = identity_history.setdefault(user.id, [])
+    previous = history[-1] if history else None
+
+    if previous is not None and previous.name == current_name and previous.username == current_username:
+        return
+
+    now = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
+    history.append(HistoryEntry(current_name, current_username, now))
 
 
 def _cache_put(cache: "OrderedDict", key, value, max_entries: int) -> None:
@@ -205,8 +244,65 @@ async def on_unir_command(event) -> None:
         )
 
 
+HISTORIAL_COMMAND_RE = re.compile(r"^\.historial(?:\s+n\s+(.+))?\s*$", re.IGNORECASE | re.DOTALL)
+
+
+@client.on(events.NewMessage(outgoing=True, pattern=HISTORIAL_COMMAND_RE))
+async def on_historial_command(event) -> None:
+    note_text = event.pattern_match.group(1)
+    await event.delete()
+
+    if not event.is_reply:
+        await client.send_message(
+            "me", "⚠️ Usa .historial respondiendo al mensaje de esa persona."
+        )
+        return
+
+    reply_msg = await event.get_reply_message()
+    if reply_msg is None or reply_msg.sender_id is None:
+        await client.send_message("me", "⚠️ No he podido identificar a esa persona.")
+        return
+
+    user_id = reply_msg.sender_id
+
+    if note_text:
+        identity_notes[user_id] = note_text.strip()
+        await client.send_message(
+            "me", f"🗒 Nota guardada para `{user_id}`.", parse_mode="markdown"
+        )
+        return
+
+    history = identity_history.get(user_id)
+    if not history:
+        await client.send_message("me", "⚠️ Todavía no tengo historial de esa persona.")
+        return
+
+    current = history[-1]
+    current_username = f"@{current.username}" if current.username else "(sin usuario)"
+
+    lines = [
+        f"🆔 ID: `{user_id}`",
+        f"📛 Nombre actual: *{current.name}*",
+        f"🔗 Usuario actual: {current_username}",
+    ]
+
+    note = identity_notes.get(user_id)
+    if note:
+        lines.append(f"🗒 Nota: {note}")
+
+    lines.append("")
+    lines.append("🕓 Historial:")
+    for entry in history:
+        entry_username = f"@{entry.username}" if entry.username else "(sin usuario)"
+        lines.append(f"• {entry.seen_at} → {entry.name}, {entry_username}")
+
+    await client.send_message("me", "\n".join(lines), parse_mode="markdown")
+
+
 @client.on(events.NewMessage(incoming=True))
 async def on_new_message(event) -> None:
+
+    await _observe_identity(await event.get_sender())
 
     entry = {
         "text": event.raw_text or (
