@@ -146,20 +146,33 @@ def _payment_message(value: int, respin: bool) -> str:
     return text
 
 
+PRIZE_TASKS = [
+    "🏆 ¡Premio especial! Manda una foto de tus pies 😂",
+    "🏆 ¡Premio especial! Escribe \"propiedad ajena\" en tus huevos con rotulador y manda la prueba 😂",
+    "🏆 ¡Premio especial! Manda un audio pidiendo perdón de la forma más humillante posible 😂",
+    "🏆 ¡Premio especial! Hazte una coleta ridícula y manda la foto 😂",
+    "🏆 ¡Premio especial! Escribe el nombre de quien manda en tus huevos con rotulador y manda la prueba 😂",
+    "🏆 ¡Premio especial! Haz 20 sentadillas ahora mismo y grábalo 😂",
+]
+
+
+def _prize_message() -> str:
+    return random.choice(PRIZE_TASKS)
+
+
+def _reveal_text(winner: "Segment") -> str:
+    if winner.kind == "prize":
+        return _prize_message()
+    return winner.reveal_text
+
+
 def _make_segments(values: list[int], respin_values: list[int]) -> list[Segment]:
     segments = [Segment(f"+{v}", kind="number", value=v, payment=True) for v in values]
     segments += [
         Segment(f"+{v}\nTIRA\nOTRA VEZ", kind="bonus", value=v, payment=True)
         for v in respin_values
     ]
-    segments.append(
-        Segment(
-            "PREMIO",
-            "🏆🦶 ¡Premio especial! Tienes que mandar una foto de tus pies 😂",
-            kind="prize",
-            value=0,
-        )
-    )
+    segments.append(Segment("PREMIO", kind="prize", value=0))
     return segments
 
 
@@ -326,7 +339,7 @@ async def spin_once(update: Update, segments: list[Segment]) -> Segment:
     if winner.payment:
         text = _payment_message(winner.value, respin=winner.kind == "bonus")
     else:
-        text = winner.reveal_text
+        text = _reveal_text(winner)
     await update.message.reply_text(text, parse_mode=ParseMode.MARKDOWN)
 
     sticker_id = await _get_random_sticker_id(update.get_bot())
@@ -378,14 +391,11 @@ async def ruleta(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     for _ in range(MAX_RESPINS):
         winner = await spin_once(update, segments)
 
-        if winner.kind == "prize":
-            return
-
         total += winner.value
         history.append(winner.wheel_label.replace("\n", " "))
         is_payment = is_payment or winner.payment
 
-        if winner.kind == "number":
+        if winner.kind != "bonus":
             break
     else:
         await update.message.reply_text("🎰 ¡Vale ya, que te quedas sin girar más! 😅")
@@ -467,7 +477,7 @@ async def inline_ruleta(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
     if winner.payment:
         caption = _payment_message(winner.value, respin=winner.kind == "bonus")
     else:
-        caption = winner.reveal_text or "🎰 ¡Ruleta girada!"
+        caption = _reveal_text(winner) or "🎰 ¡Ruleta girada!"
 
     result_id = uuid.uuid4().hex
     pending_inline_results[result_id] = (
@@ -543,7 +553,7 @@ async def inline_result_chosen(update: Update, context: ContextTypes.DEFAULT_TYP
         if new_winner.payment:
             caption = _payment_message(new_winner.value, respin=new_winner.kind == "bonus")
         else:
-            caption = new_winner.reveal_text or "🎰 ¡Ruleta girada!"
+            caption = _reveal_text(new_winner) or "🎰 ¡Ruleta girada!"
 
         await context.bot.edit_message_media(
             inline_message_id=inline_message_id,

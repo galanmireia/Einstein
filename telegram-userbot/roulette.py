@@ -85,20 +85,27 @@ def _payment_message(value: int, respin: bool) -> str:
     return text
 
 
+PRIZE_TASKS = [
+    "🏆 ¡Premio especial! Manda una foto de tus pies 😂",
+    "🏆 ¡Premio especial! Escribe \"propiedad ajena\" en tus huevos con rotulador y manda la prueba 😂",
+    "🏆 ¡Premio especial! Manda un audio pidiendo perdón de la forma más humillante posible 😂",
+    "🏆 ¡Premio especial! Hazte una coleta ridícula y manda la foto 😂",
+    "🏆 ¡Premio especial! Escribe el nombre de quien manda en tus huevos con rotulador y manda la prueba 😂",
+    "🏆 ¡Premio especial! Haz 20 sentadillas ahora mismo y grábalo 😂",
+]
+
+
+def _prize_message() -> str:
+    return random.choice(PRIZE_TASKS)
+
+
 def _make_segments(values: list[int], respin_values: list[int]) -> list[Segment]:
     segments = [Segment(f"+{v}", kind="number", value=v, payment=True) for v in values]
     segments += [
         Segment(f"+{v}\nTIRA\nOTRA VEZ", kind="bonus", value=v, payment=True)
         for v in respin_values
     ]
-    segments.append(
-        Segment(
-            "PREMIO",
-            "🏆🦶 ¡Premio especial! Tienes que mandar una foto de tus pies 😂",
-            kind="prize",
-            value=0,
-        )
-    )
+    segments.append(Segment("PREMIO", kind="prize", value=0))
     return segments
 
 
@@ -149,6 +156,8 @@ async def _spin_once(client, chat_id, segments: list[Segment]) -> Segment:
 
     if winner.payment:
         text = _payment_message(winner.value, respin=winner.kind == "bonus")
+    elif winner.kind == "prize":
+        text = _prize_message()
     else:
         text = winner.reveal_text
 
@@ -178,14 +187,11 @@ async def run_roulette(client, chat_id, requested_difficulty: str | None) -> Non
     for _ in range(MAX_RESPINS):
         winner = await _spin_once(client, chat_id, segments)
 
-        if winner.kind == "prize":
-            return
-
         total += winner.value
         history.append(winner.wheel_label.replace("\n", " "))
         is_payment = is_payment or winner.payment
 
-        if winner.kind == "number":
+        if winner.kind != "bonus":
             break
     else:
         await client.send_message(chat_id, "🎰 ¡Vale ya, que te quedas sin girar más! 😅")
