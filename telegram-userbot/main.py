@@ -1,11 +1,14 @@
 import asyncio
 import logging
 import os
+import re
 from collections import OrderedDict
 from io import BytesIO
 
 from telethon import TelegramClient, events
 from telethon.sessions import StringSession
+
+from roulette import DIFFICULTIES, run_roulette
 
 logging.basicConfig(
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
@@ -171,6 +174,23 @@ async def _send_media_to_alerts(key, media) -> None:
             "No se pudo enviar automáticamente la media: %s",
             key,
         )
+
+
+ROULETTE_COMMAND_RE = re.compile(r"^\.ruleta(?:\s+(\w+))?\s*$", re.IGNORECASE)
+
+
+@client.on(events.NewMessage(outgoing=True, pattern=ROULETTE_COMMAND_RE))
+async def on_ruleta_command(event) -> None:
+    difficulty_arg = (event.pattern_match.group(1) or "").lower()
+    requested_difficulty = difficulty_arg if difficulty_arg in DIFFICULTIES else None
+
+    await event.delete()
+
+    try:
+        await run_roulette(client, event.chat_id, requested_difficulty)
+    except Exception:
+        logger.exception("Error al girar la ruleta")
+        await client.send_message(event.chat_id, "⚠️ Algo falló girando la ruleta.")
 
 
 @client.on(events.NewMessage(incoming=True))
