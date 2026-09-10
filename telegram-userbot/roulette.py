@@ -7,17 +7,49 @@ was typed in, using the account's own identity.
 """
 
 import asyncio
+import os
 import random
 from dataclasses import dataclass
 from io import BytesIO
 
-from telethon.tl.types import DocumentAttributeVideo
+from telethon.tl.functions.messages import GetStickerSetRequest
+from telethon.tl.types import DocumentAttributeVideo, InputStickerSetShortName
 
 from roulette_wheel import build_spin_video
 
 MIN_OPTIONS = 2
 MAX_OPTIONS = 10
 MAX_RESPINS = 5
+
+# Optional: short name of a Telegram sticker set (the part after
+# t.me/addstickers/) to send one random sticker from alongside each
+# result. Empty (the default) means no sticker is sent.
+STICKER_PACK_NAME = os.environ.get("STICKER_PACK_NAME", "").strip()
+_sticker_documents: list | None = None
+
+
+async def _get_random_sticker(client):
+    global _sticker_documents
+
+    if not STICKER_PACK_NAME:
+        return None
+
+    if _sticker_documents is None:
+        try:
+            result = await client(
+                GetStickerSetRequest(
+                    stickerset=InputStickerSetShortName(short_name=STICKER_PACK_NAME),
+                    hash=0,
+                )
+            )
+            _sticker_documents = result.documents
+        except Exception:
+            _sticker_documents = []
+
+    if not _sticker_documents:
+        return None
+
+    return random.choice(_sticker_documents)
 
 
 @dataclass
@@ -115,6 +147,10 @@ async def _spin_once(client, chat_id, segments: list[Segment]) -> Segment:
 
     if text:
         await client.send_message(chat_id, text, parse_mode="markdown")
+
+    sticker = await _get_random_sticker(client)
+    if sticker is not None:
+        await client.send_file(chat_id, sticker)
 
     return winner
 

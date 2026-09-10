@@ -73,6 +73,33 @@ def _is_allowed(user) -> bool:
         return True
     return False
 
+
+# Optional: short name of a Telegram sticker set (the part after
+# t.me/addstickers/) to send one random sticker from alongside each
+# result. Empty (the default) means no sticker is sent.
+STICKER_PACK_NAME = os.environ.get("STICKER_PACK_NAME", "").strip()
+_sticker_file_ids: list[str] | None = None
+
+
+async def _get_random_sticker_id(bot) -> str | None:
+    global _sticker_file_ids
+
+    if not STICKER_PACK_NAME:
+        return None
+
+    if _sticker_file_ids is None:
+        try:
+            sticker_set = await bot.get_sticker_set(STICKER_PACK_NAME)
+            _sticker_file_ids = [sticker.file_id for sticker in sticker_set.stickers]
+        except Exception:
+            logger.exception("No se pudo cargar el pack de stickers %s", STICKER_PACK_NAME)
+            _sticker_file_ids = []
+
+    if not _sticker_file_ids:
+        return None
+
+    return random.choice(_sticker_file_ids)
+
 # Inline mode needs a public URL for the video/thumbnail (Telegram fetches
 # them itself), so generated media is cached here briefly and served by a
 # small web server running alongside the bot. media_id -> (bytes, content_type, expires_at)
@@ -295,6 +322,10 @@ async def spin_once(update: Update, segments: list[Segment]) -> Segment:
     else:
         text = winner.reveal_text
     await update.message.reply_text(text, parse_mode=ParseMode.MARKDOWN)
+
+    sticker_id = await _get_random_sticker_id(update.get_bot())
+    if sticker_id:
+        await update.message.reply_sticker(sticker_id)
 
     return winner
 
