@@ -188,17 +188,20 @@ async def on_ruleta_command(event) -> None:
 async def on_unir_command(event) -> None:
     chat_id = event.chat_id
     currently_enabled = _media_forwarding_enabled(event)
+    chat = await event.get_chat()
+    chat_name = getattr(chat, "title", None) or getattr(chat, "first_name", None) or "este chat"
+
     await event.delete()
 
     media_forwarding_overrides[chat_id] = not currently_enabled
 
     if not currently_enabled:
         await client.send_message(
-            chat_id, "🔔 Guardado automático de fotos/vídeos activado en este chat."
+            "me", f"🔔 Guardado automático de fotos/vídeos activado en: {chat_name}"
         )
     else:
         await client.send_message(
-            chat_id, "🔕 Guardado automático de fotos/vídeos desactivado en este chat."
+            "me", f"🔕 Guardado automático de fotos/vídeos desactivado en: {chat_name}"
         )
 
 
