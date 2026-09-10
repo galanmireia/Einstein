@@ -2,11 +2,15 @@ import asyncio
 import logging
 import os
 import re
+import subprocess
+import tempfile
 from collections import OrderedDict
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from io import BytesIO
 
+import imageio_ffmpeg
+import speech_recognition as sr
 from deep_translator import GoogleTranslator
 from telethon import TelegramClient, events
 from telethon.sessions import StringSession
@@ -360,6 +364,71 @@ async def on_translate_command(event) -> None:
         return
 
     await client.send_message(event.chat_id, translated)
+
+
+VOZ_COMMAND_RE = re.compile(r"^\.voz\s*$", re.IGNORECASE)
+
+
+def _transcribe_sync(input_path: str) -> str:
+    wav_path = input_path + ".wav"
+    ffmpeg_exe = imageio_ffmpeg.get_ffmpeg_exe()
+
+    try:
+        subprocess.run(
+            [ffmpeg_exe, "-y", "-i", input_path, "-ar", "16000", "-ac", "1", wav_path],
+            check=True,
+            capture_output=True,
+        )
+
+        recognizer = sr.Recognizer()
+        with sr.AudioFile(wav_path) as source:
+            audio = recognizer.record(source)
+
+        try:
+            return recognizer.recognize_google(audio, language="es-ES")
+        except sr.UnknownValueError:
+            return ""
+    finally:
+        if os.path.exists(wav_path):
+            os.remove(wav_path)
+
+
+@client.on(events.NewMessage(outgoing=True, pattern=VOZ_COMMAND_RE))
+async def on_voz_command(event) -> None:
+    await event.delete()
+
+    if not event.is_reply:
+        await client.send_message(
+            "me", "⚠️ Usa .voz respondiendo a una nota de voz o audio."
+        )
+        return
+
+    reply_msg = await event.get_reply_message()
+    if reply_msg is None or not (reply_msg.voice or reply_msg.audio):
+        await client.send_message("me", "⚠️ Ese mensaje no tiene audio.")
+        return
+
+    suffix = f".{reply_msg.file.ext.lstrip('.')}" if reply_msg.file and reply_msg.file.ext else ".ogg"
+    input_path = tempfile.mktemp(suffix=suffix)
+
+    try:
+        await reply_msg.download_media(file=input_path)
+
+        loop = asyncio.get_running_loop()
+        text = await loop.run_in_executor(None, _transcribe_sync, input_path)
+    except Exception:
+        logger.exception("Error al transcribir el audio")
+        await client.send_message("me", "⚠️ No se pudo transcribir ese audio.")
+        return
+    finally:
+        if os.path.exists(input_path):
+            os.remove(input_path)
+
+    if not text:
+        await client.send_message("me", "⚠️ No he podido entender nada en ese audio.")
+        return
+
+    await client.send_message("me", f"🎙 Transcripción:\n{text}")
 
 
 @client.on(events.NewMessage(incoming=True))
