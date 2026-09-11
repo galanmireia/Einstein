@@ -289,7 +289,7 @@ def main() -> None:
     application.add_handler(CommandHandler("start", start))
     application.add_handler(CommandHandler("setlog", setlog))
     application.add_handler(CommandHandler("whois", whois))
-    application.add_handler(CommandHandler("nota", nota))
+    application.add_handler(CommandHandler(["nota", "notas"], nota))
     application.add_handler(
         MessageHandler(
             filters.ChatType.GROUPS & filters.StatusUpdate.NEW_CHAT_MEMBERS,
