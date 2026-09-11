@@ -45,6 +45,18 @@ username_index: dict[str, int] = {}
 log_chat_id: int | None = None
 
 
+@dataclass
+class Note:
+    author: str
+    text: str
+    seen_at: str
+
+
+# Notas compartidas entre todos los admins: cualquiera puede añadir o ver
+# las de los demás, construyendo un histórico común por persona.
+notes: dict[int, list[Note]] = {}
+
+
 def _escape_markdown(text: str) -> str:
     return re.sub(r"([_*`\[])", r"\\\1", text)
 
@@ -65,7 +77,10 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         "ahí dentro — así todos los cambios se notifican en ese grupo en vez "
         "de en el grupo original.\n"
         "3️⃣ Usa /whois @usuario para ver el ID y el historial que tengo "
-        "guardado de alguien.\n\n"
+        "guardado de alguien.\n"
+        "4️⃣ Usa /nota (respondiendo a su mensaje) para dejar una nota sobre "
+        "alguien — la ven todos los admins con /whois, y entre todos vais "
+        "construyendo un histórico común.\n\n"
         "Solo puedo ver a gente que ha escrito algo en un grupo donde estoy "
         "añadido — no tengo datos de nadie más."
     )
@@ -88,25 +103,29 @@ async def setlog(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
 GROUP_ANONYMOUS_BOT_ID = 1087968824
 
 
+async def _is_group_admin(update: Update, context: ContextTypes.DEFAULT_TYPE) -> bool:
+    # Messages sent as "anonymous admin" arrive from Telegram's special
+    # GroupAnonymousBot account instead of the real user, so get_chat_member
+    # on that id would fail even though only real admins can send that way.
+    if update.effective_user.id == GROUP_ANONYMOUS_BOT_ID:
+        return True
+
+    member = await context.bot.get_chat_member(
+        update.effective_chat.id, update.effective_user.id
+    )
+    return member.status in ("administrator", "creator")
+
+
 async def whois(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     if not update.effective_chat or update.effective_chat.type not in GROUP_CHAT_TYPES:
         await update.message.reply_text("Este comando es para usarlo dentro de un grupo.")
         return
 
-    # Messages sent as "anonymous admin" arrive from Telegram's special
-    # GroupAnonymousBot account instead of the real user, so get_chat_member
-    # on that id would fail even though only real admins can send that way.
-    is_anonymous_admin = update.effective_user.id == GROUP_ANONYMOUS_BOT_ID
-
-    if not is_anonymous_admin:
-        member = await context.bot.get_chat_member(
-            update.effective_chat.id, update.effective_user.id
+    if not await _is_group_admin(update, context):
+        await update.message.reply_text(
+            "⚠️ Solo los administradores del grupo pueden usar /whois."
         )
-        if member.status not in ("administrator", "creator"):
-            await update.message.reply_text(
-                "⚠️ Solo los administradores del grupo pueden usar /whois."
-            )
-            return
+        return
 
     if not context.args:
         await update.message.reply_text("Uso: /whois @usuario")
@@ -139,7 +158,60 @@ async def whois(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
             f"• {entry.seen_at} → {_escape_markdown(entry.name)}, {entry_username}"
         )
 
+    user_notes = notes.get(user_id)
+    if user_notes:
+        lines.append("")
+        lines.append("🗒 Notas:")
+        for note in user_notes:
+            lines.append(
+                f"• {note.seen_at} ({_escape_markdown(note.author)}): "
+                f"{_escape_markdown(note.text)}"
+            )
+
     await update.message.reply_text("\n".join(lines), parse_mode=ParseMode.MARKDOWN)
+
+
+async def nota(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    if not update.effective_chat or update.effective_chat.type not in GROUP_CHAT_TYPES:
+        await update.message.reply_text("Este comando es para usarlo dentro de un grupo.")
+        return
+
+    if not await _is_group_admin(update, context):
+        await update.message.reply_text(
+            "⚠️ Solo los administradores del grupo pueden usar /nota."
+        )
+        return
+
+    if not update.message.reply_to_message:
+        await update.message.reply_text(
+            "Usa /nota respondiendo al mensaje de la persona, seguido del texto. "
+            "Ejemplo: /nota paga bien y rápido"
+        )
+        return
+
+    if not context.args:
+        await update.message.reply_text("Escribe algo después de /nota.")
+        return
+
+    target = update.message.reply_to_message.from_user
+    if target is None or target.is_bot:
+        await update.message.reply_text("⚠️ No puedo identificar a esa persona.")
+        return
+
+    author = update.effective_user.first_name or "Alguien"
+    if update.effective_user.username:
+        author = f"@{update.effective_user.username}"
+
+    now = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
+    note_text = " ".join(context.args)
+
+    notes.setdefault(target.id, []).append(Note(author, note_text, now))
+
+    await update.message.reply_text(
+        f"✅ Nota guardada para {_escape_markdown(target.first_name or 'esa persona')}. "
+        "Cualquier admin puede verla con /whois.",
+        parse_mode=ParseMode.MARKDOWN,
+    )
 
 
 async def _observe_identity(context: ContextTypes.DEFAULT_TYPE, chat, user) -> None:
@@ -217,6 +289,7 @@ def main() -> None:
     application.add_handler(CommandHandler("start", start))
     application.add_handler(CommandHandler("setlog", setlog))
     application.add_handler(CommandHandler("whois", whois))
+    application.add_handler(CommandHandler("nota", nota))
     application.add_handler(
         MessageHandler(
             filters.ChatType.GROUPS & filters.StatusUpdate.NEW_CHAT_MEMBERS,
