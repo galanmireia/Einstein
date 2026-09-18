@@ -60,6 +60,15 @@ identity_history: dict[int, list[HistoryEntry]] = {}
 # Notas manuales guardadas con ".historial n <texto>", por user_id.
 identity_notes: dict[int, str] = {}
 
+# Fecha del primer mensaje privado recibido de cada persona. Solo se
+# rellena a partir de ahora, no reconstruye contactos anteriores.
+first_contact: dict[int, str] = {}
+
+
+def _record_first_contact(user_id: int) -> None:
+    if user_id not in first_contact:
+        first_contact[user_id] = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
+
 
 def _current_identity(user) -> tuple[str, str | None]:
     name = user.first_name or ""
@@ -293,6 +302,10 @@ async def on_historial_command(event) -> None:
         f"📛 Nombre actual: *{current.name}*",
         f"🔗 Usuario actual: {current_username}",
     ]
+
+    first_contact_at = first_contact.get(user_id)
+    if first_contact_at:
+        lines.append(f"🗓 Primer mensaje privado: {first_contact_at}")
 
     note = identity_notes.get(user_id)
     if note:
@@ -531,7 +544,10 @@ async def on_formato_command(event) -> None:
 @client.on(events.NewMessage(incoming=True))
 async def on_new_message(event) -> None:
 
-    await _observe_identity(await event.get_sender())
+    sender = await event.get_sender()
+    await _observe_identity(sender)
+    if event.is_private and sender is not None:
+        _record_first_contact(sender.id)
 
     entry = {
         "text": event.raw_text or (
