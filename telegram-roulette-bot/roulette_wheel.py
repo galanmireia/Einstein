@@ -120,11 +120,9 @@ def build_spin_video(
     intro_hold_seconds: float = 0.3,
 ) -> tuple[bytes, int, int, int, bytes]:
     import os
-    import subprocess
     import tempfile
 
     import imageio.v2 as imageio
-    import imageio_ffmpeg
     import numpy as np
 
     base_wheel = _build_base_wheel(labels)
@@ -167,68 +165,21 @@ def build_spin_video(
     thumbnail_bytes = thumbnail_buffer.getvalue()
 
     silent_path = tempfile.mktemp(suffix=".mp4")
-    final_path = tempfile.mktemp(suffix=".mp4")
     try:
+        # Silent on purpose: Telegram treats a muted/near-silent short clip
+        # like a GIF and autoplays it as you scroll past, which is what we
+        # want here even though it risks the same clip auto-looping in some
+        # contexts — a real audio track avoided that but forced a manual
+        # tap to play, which read worse than the occasional loop.
         with imageio.get_writer(
             silent_path, fps=fps, codec="libx264", quality=8, pixelformat="yuv420p"
         ) as writer:
             for frame in video_frames:
                 writer.append_data(np.array(frame))
 
-        # Telegram auto-loops videos it detects as having no (or negligible)
-        # sound, like GIFs. A real, audible sound effect avoids that, and
-        # also fits a spinning roulette: a trilling "drumroll" while it
-        # spins, then a short "ding" when it lands on the number.
-        ding_seconds = 0.4
-        spin_seconds = max(0.1, total_duration_ms / 1000 - ding_seconds)
-        filter_complex = (
-            "[1:a]tremolo=f=18:d=0.85,volume=0.35[spin];"
-            f"[2:a]afade=t=out:st=0:d={ding_seconds},volume=0.5[ding];"
-            "[spin][ding]concat=n=2:v=0:a=1[aout]"
-        )
-
-        ffmpeg_exe = imageio_ffmpeg.get_ffmpeg_exe()
-        subprocess.run(
-            [
-                ffmpeg_exe,
-                "-y",
-                "-i",
-                silent_path,
-                "-f",
-                "lavfi",
-                "-t",
-                f"{spin_seconds:.3f}",
-                "-i",
-                "sine=frequency=700:sample_rate=44100",
-                "-f",
-                "lavfi",
-                "-t",
-                f"{ding_seconds:.3f}",
-                "-i",
-                "sine=frequency=1200:sample_rate=44100",
-                "-filter_complex",
-                filter_complex,
-                "-map",
-                "0:v",
-                "-map",
-                "[aout]",
-                "-c:v",
-                "copy",
-                "-c:a",
-                "aac",
-                "-b:a",
-                "96k",
-                "-shortest",
-                final_path,
-            ],
-            check=True,
-            capture_output=True,
-        )
-
-        with open(final_path, "rb") as f:
+        with open(silent_path, "rb") as f:
             video_bytes = f.read()
     finally:
-        for path in (silent_path, final_path):
-            if os.path.exists(path):
-                os.remove(path)
+        if os.path.exists(silent_path):
+            os.remove(silent_path)
     return video_bytes, total_duration_ms, SIZE, SIZE, thumbnail_bytes
