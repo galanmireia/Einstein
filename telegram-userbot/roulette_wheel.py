@@ -117,7 +117,7 @@ def build_spin_video(
     frame_count: int = 28,
     fps: int = 20,
     hold_seconds: float = 1.5,
-    intro_hold_seconds: float = 1.0,
+    intro_hold_seconds: float = 0.3,
 ) -> tuple[bytes, int, int, int, bytes]:
     import os
     import subprocess
