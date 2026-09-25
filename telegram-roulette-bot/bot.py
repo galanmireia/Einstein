@@ -18,6 +18,7 @@ from telegram import (
     Update,
 )
 from telegram.constants import ChatType, ParseMode
+from telegram.error import TelegramError
 from telegram.ext import (
     Application,
     ChosenInlineResultHandler,
@@ -555,17 +556,25 @@ async def inline_result_chosen(update: Update, context: ContextTypes.DEFAULT_TYP
         else:
             caption = _reveal_text(new_winner) or "🎰 ¡Ruleta girada!"
 
-        await context.bot.edit_message_media(
-            inline_message_id=inline_message_id,
-            media=InputMediaVideo(
-                media=video_url,
-                caption=caption,
-                parse_mode=ParseMode.MARKDOWN,
-                width=width,
-                height=height,
-                duration=round(wait_ms / 1000),
-            ),
-        )
+        try:
+            await context.bot.edit_message_media(
+                inline_message_id=inline_message_id,
+                media=InputMediaVideo(
+                    media=video_url,
+                    caption=caption,
+                    parse_mode=ParseMode.MARKDOWN,
+                    width=width,
+                    height=height,
+                    duration=round(wait_ms / 1000),
+                ),
+            )
+        except TelegramError:
+            logger.exception(
+                "No se pudo editar el mensaje inline para encadenar el giro "
+                "(inline_message_id=%s); se corta la cadena aquí.",
+                inline_message_id,
+            )
+            return
 
         total += new_winner.value
         history.append(new_winner.wheel_label.replace("\n", " "))
@@ -577,11 +586,18 @@ async def inline_result_chosen(update: Update, context: ContextTypes.DEFAULT_TYP
         breakdown = " + ".join(history)
         label = "Total a pagar" if is_payment else "Total acumulado"
         suffix = "€" if is_payment else ""
-        await context.bot.edit_message_caption(
-            inline_message_id=inline_message_id,
-            caption=f"🧮 {label} ({breakdown}) = *{total}{suffix}*",
-            parse_mode=ParseMode.MARKDOWN,
-        )
+        try:
+            await context.bot.edit_message_caption(
+                inline_message_id=inline_message_id,
+                caption=f"🧮 {label} ({breakdown}) = *{total}{suffix}*",
+                parse_mode=ParseMode.MARKDOWN,
+            )
+        except TelegramError:
+            logger.exception(
+                "No se pudo mandar el resumen final al mensaje inline "
+                "(inline_message_id=%s).",
+                inline_message_id,
+            )
 
 
 async def _start_web_server(application: Application) -> None:
